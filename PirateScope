@@ -119,6 +119,9 @@ class BPO(Thread):
 
 class MainWindow(wx.Frame):
 
+	# Define Bus Pirate port (temporary)
+	port = '/dev/bus_pirate'
+
 	def __init__(self, parent, title):
 
 		# Call standard frame constructor:
@@ -260,14 +263,14 @@ terms of the GNU General Public License.
 		self.plot.Draw(gc, xAxis=(0,100), yAxis=(-1,7))
 
 	def OnSampleButton(self, event):
-		
+
 		if self.SampleButton.GetValue():
 
 			# Fire up oscilloscope:
 			try: 
-				self.bpo = BPO('/dev/bus_pirate', 2, BPO.MODE_CONTINUOUS, BPO.SYNC_NONE)
+				self.bpo = BPO(self.port, 2, BPO.MODE_CONTINUOUS, BPO.SYNC_NONE)
 			except:
-				msg = "Failed to open Bus Pirate port '" + port + "'.\nCheck USB connection."
+				msg = "Failed to open Bus Pirate port '" + self.port + "'.\nCheck USB connection."
 				dlg = wx.MessageDialog(self, msg, "Error", wx.OK)
 				dlg.ShowModal()
 				dlg.Destroy()
