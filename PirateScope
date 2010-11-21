@@ -7,18 +7,41 @@ from threading import Thread
 
 from numpy import *
 
-class BusPirateOscilloscope(Thread):
+class BPO(Thread):
 
-	def __init__(self, port, datalen):
+	SYNC_NONE = 0
+	SYNC_RISE = 1
+	SYNC_FALL = 2
 
-		Thread.__init__(self)
+	MODE_CONTINUOUS = 0
+	MODE_ONESHOT = 1
+
+	minRate = 1.
+	maxRate = 5720.
+
+	minV = 0.
+	maxV = 6.6
+
+	minPhase = -1.
+	maxPhase = 1.
+
+	data = zeros(100)
+
+	def __init__(self, port, skips, mode, sync):
 
 		# Open BP serial device:
 		try:
 			self.serdev = serial.Serial(port=port, baudrate=115200)
 		except:
-			print "Error connecting to Bus Pirate. Is it plugged in?\n"
-			sys.exit(1)
+			raise
+
+
+		Thread.__init__(self)
+
+		# Set oscilloscope options
+		self.mode = mode
+		self.sync = sync
+		self.skips = skips
 
 		# Enter binary scripting mode:
 		self.serdev.write('\n\n')
@@ -31,23 +54,53 @@ class BusPirateOscilloscope(Thread):
 		self.serdev.write('\x15')
 		time.sleep(0.1)
 
-		self.datalen = datalen
-		self.data = zeros(datalen)
-
 		self.wantAbort = False
 
 		self.start()
-	
+
+
 	def run(self):
 
-		while True:
-			for i in range(self.datalen):
+		if self.mode == self.MODE_CONTINUOUS:
+			self.continuous_sample()
+
+		elif self.mode == self.MODE_ONESHOT:
+			self.oneshot_sample()
+		
+
+	def oneshot_sample(self):
+
+		if self.sync == self.SYNC_NONE:
+
+			for i in range(len(self.data)):
 				resp = self.serdev.read(2)
 				self.data[i] = (ord(resp[0])*256 + ord(resp[1]))*6.6/1024
+
+				for s in range(self.skips):
+					resp = self.serdev.read(2)
 
 				if self.wantAbort:
 					self.shutdown()
 					return
+
+
+	def continuous_sample(self):
+
+		if self.sync == self.SYNC_NONE:
+
+			while True:
+
+				for i in range(len(self.data)):
+					resp = self.serdev.read(2)
+					self.data[i] = (ord(resp[0])*256 + ord(resp[1]))*6.6/1024
+
+					for s in range(self.skips):
+						resp = self.serdev.read(2)
+
+					if self.wantAbort:
+						self.shutdown()
+						return
+
 
 	def abort(self):
 		self.wantAbort = True
@@ -69,71 +122,168 @@ class MainWindow(wx.Frame):
 	def __init__(self, parent, title):
 
 		# Call standard frame constructor:
-		wx.Frame.__init__(self, parent, title=title, id=wx.ID_ANY)
-
-		# Create panel:
-		self.panel = wx.Panel(self)
-
-		# Set up plot window:
-
-		self.plot = plot.PlotCanvas(self.panel)
-		#self.plot.SetInitialSize(size=(640,-1))
-		self.plot.SetBackgroundColour('black')
+		wx.Frame.__init__(self, parent, title=title, id=wx.ID_ANY, size=(500,480))
 
 		# Add status bar:
 		self.CreateStatusBar()
 
-		# Set up menu:
-		filemenu = wx.Menu()
-		menuItemSave = filemenu.Append(wx.ID_ANY, "&Save", "Save sample to file")
-		menuItemAbout = filemenu.Append(wx.ID_ABOUT, "&About", "Information about this program.")
-		filemenu.AppendSeparator()
-		menuItemExit = filemenu.Append(wx.ID_EXIT, "E&xit", "Terminate the program.")
-		menuBar = wx.MenuBar()
-		menuBar.Append(filemenu, "&File")
-		self.SetMenuBar(menuBar)
-		self.Bind(wx.EVT_MENU, self.OnAbout, menuItemAbout)
-		self.Bind(wx.EVT_MENU, self.OnExit, menuItemExit)
+		# Set up Menus:
+		self.MenuSetup()
 
-		# Use sizers to arrange panel contents:
-		self.vsizer = wx.BoxSizer(wx.VERTICAL)
-		self.hsizer = wx.BoxSizer(wx.HORIZONTAL)
-		self.hsizer.Add(self.plot, 1, wx.EXPAND)
-		self.vsizer.Add(self.hsizer, 1, wx.EXPAND)
-		self.panel.SetSizer(self.vsizer)
+		# Main panel:
+		self.panel = wx.Panel(self)
 
-		# Fire up oscilloscope:
-		self.bpo = BusPirateOscilloscope('/dev/bus_pirate', 100)
+		# Set up plot window:
+		self.plotpanel = wx.Panel(self.panel)
+		self.plot = plot.PlotCanvas(self.plotpanel)
+
+		# Plot window panel sizers:
+		self.plotsizer = wx.BoxSizer(wx.VERTICAL)
+		self.plotsizer.Add(self.plot, 1, wx.EXPAND)
+		self.plotpanel.SetSizer(self.plotsizer)
+
+		# Set up oscilloscope controls:
+		self.contpanel = wx.Panel(self.panel, style=wx.BORDER_SUNKEN)
+		self.SampleButton = wx.ToggleButton(self.contpanel, wx.ID_ANY, 'SAMPLE')
+		self.SamplingBox = wx.StaticBox(self.contpanel, wx.ID_ANY, 'Sampling')
+		self.RB_continuous = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Continuous', style=wx.RB_GROUP)
+		self.RB_singleshot = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Single shot')
+		self.RateSlider = wx.Slider(self.contpanel, wx.ID_ANY, BPO.maxRate, BPO.minRate, BPO.maxRate,
+				style=wx.SL_VERTICAL,
+				size=(-1,100))
+		self.FreqCheckBox = wx.CheckBox(self.contpanel, wx.ID_ANY, 'Spectrum')
+		self.TriggeringBox = wx.StaticBox(self.contpanel, wx.ID_ANY, 'Triggering')
+		self.RB_trigoff = wx.RadioButton(self.contpanel, wx.ID_ANY, 'No sync', style=wx.RB_GROUP)
+		self.RB_trigrise = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Rising edge')
+		self.RB_trigfall = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Falling edge')
+		self.TrigLevSlider = wx.Slider(self.contpanel, wx.ID_ANY, BPO.minV, BPO.minV, BPO.maxV,
+				style=wx.SL_VERTICAL,
+				size=(-1, 100))
+		self.PhaseSlider = wx.Slider(self.contpanel, wx.ID_ANY, 0, BPO.minPhase, BPO.maxPhase,
+				style=wx.SL_VERTICAL,
+				size=(-1,100))
+
+		# Oscilloscope controls panel sizers:
+		self.contsizer = wx.BoxSizer(wx.HORIZONTAL)
+		self.contsizer.Add(self.SampleButton, 0, wx.EXPAND | wx.ALL, 20)
+		self.contpanel.SetSizer(self.contsizer)
+		self.SamplingBoxSizer = wx.StaticBoxSizer(self.SamplingBox, wx.HORIZONTAL)
+		self.SamplingBoxSizer2 = wx.BoxSizer(wx.VERTICAL)
+		self.SamplingBoxSizer2.Add(self.RB_continuous, 1)
+		self.SamplingBoxSizer2.Add(self.RB_singleshot, 1)
+		self.SamplingBoxSizer2.Add(self.FreqCheckBox, 1)
+		self.SamplingBoxSizer.Add(self.SamplingBoxSizer2, 1, wx.EXPAND)
+		self.SamplingBoxSizer.Add(self.RateSlider, 0, wx.EXPAND)
+		self.contsizer.Add(self.SamplingBoxSizer, 1, wx.EXPAND | wx.RIGHT, 20)
+
+		self.TriggeringBoxSizer = wx.StaticBoxSizer(self.TriggeringBox, wx.HORIZONTAL)
+		self.TriggeringBoxSizer2 = wx.BoxSizer(wx.VERTICAL)
+		self.TriggeringBoxSizer2.Add(self.RB_trigoff,1)
+		self.TriggeringBoxSizer2.Add(self.RB_trigrise,1)
+		self.TriggeringBoxSizer2.Add(self.RB_trigfall,1)
+		self.TriggeringBoxSizer.Add(self.TriggeringBoxSizer2, 1, wx.EXPAND)
+		self.TriggeringBoxSizer.Add(self.TrigLevSlider, 0, wx.EXPAND)
+		self.TriggeringBoxSizer.Add(self.PhaseSlider, 0, wx.EXPAND)
+		self.contsizer.Add(self.TriggeringBoxSizer, 1, wx.EXPAND)
+
+		# Main panel sizers:
+		self.sizer = wx.BoxSizer(wx.VERTICAL)
+		self.sizer.Add(self.plotpanel, 1, wx.EXPAND)
+		self.sizer.Add(self.contpanel, 0, wx.EXPAND)
+		self.panel.SetSizer(self.sizer)
+
+		# Bind event handlers:
+		self.Bind(wx.EVT_TOGGLEBUTTON, self.OnSampleButton, self.SampleButton)
+
+		# Draw empty plot:
+		self.ClearPlot()
 
 		# Set up plot updating timer:
 		self.timer = wx.Timer(self)
 		self.Bind(wx.EVT_TIMER, self.OnUpdate, self.timer)
 
-		# Start timer (0.1s invervals):
-		self.timer.Start(milliseconds=100)
-
 		self.Show(True)
+
+
+	def MenuSetup(self):
+
+		# Set up menus:
+		filemenu = wx.Menu()
+		menuItemSave = filemenu.Append(wx.ID_ANY, "&Save", "Save sample to file")
+		menuItemSave.Enable(False)
+		filemenu.AppendSeparator()
+		menuItemExit = filemenu.Append(wx.ID_EXIT, "E&xit", "Terminate the program.")
+		helpmenu = wx.Menu()
+		menuItemAbout = helpmenu.Append(wx.ID_ABOUT, "&About", "Information about this program.")
+		menuBar = wx.MenuBar()
+		menuBar.Append(filemenu, "&File")
+		menuBar.Append(helpmenu, "&Help")
+		self.SetMenuBar(menuBar)
+		self.Bind(wx.EVT_MENU, self.OnAbout, menuItemAbout)
+		self.Bind(wx.EVT_MENU, self.OnExit, menuItemExit)
 	
+	def ClearPlot(self):
+
+		gc = plot.PlotGraphics([], '', 'Sample', 'Voltage')
+		self.plot.Draw(gc, xAxis=(0,100), yAxis=(-1,7))
+	
+
 	def OnAbout(self, event):
 
-		dlg = wx.MessageDialog(self, "PirateScope v0.1 (c) 2010 FSF", "About PirateScope", wx.OK)
+		about_msg = """
+PirateScope v0.1
+(C) 2010 Free Software Foundation
+
+This software is distributed under the
+terms of the GNU General Public License.
+"""
+
+		dlg = wx.MessageDialog(self, about_msg, "About PirateScope", wx.OK)
 		dlg.ShowModal()
 		dlg.Destroy()
 	
 	def OnExit(self, event):
 
-		self.timer.Stop()
-		self.bpo.abort()
-		time.sleep(0.5)
+		if self.SampleButton.GetValue():
+			self.timer.Stop()
+			self.bpo.abort()
+			time.sleep(0.5)
+
 		self.Close(True)
 	
 	def OnUpdate(self, event):
 
-		data = [(i,self.bpo.data[i]) for i in range(100)]
+		data = [(i,self.bpo.data[i]) for i in range(len(self.bpo.data))]
 
 		line = plot.PolyLine(data, colour='blue', width=2)
 		gc = plot.PlotGraphics([line], '', 'Sample', 'Voltage')
 		self.plot.Draw(gc, xAxis=(0,100), yAxis=(-1,7))
+
+	def OnSampleButton(self, event):
+		
+		if self.SampleButton.GetValue():
+
+			# Fire up oscilloscope:
+			try: 
+				self.bpo = BPO('/dev/bus_pirate', 2, BPO.MODE_CONTINUOUS, BPO.SYNC_NONE)
+			except:
+				msg = "Failed to open Bus Pirate port '" + port + "'.\nCheck USB connection."
+				dlg = wx.MessageDialog(self, msg, "Error", wx.OK)
+				dlg.ShowModal()
+				dlg.Destroy()
+
+				self.SampleButton.SetValue(False)
+				return
+
+			# Start plot timer (0.1s intervals):
+			self.timer.Start(milliseconds=100)
+
+		else:
+			self.timer.Stop()
+			self.bpo.abort()
+			self.ClearPlot()
+
+
 
 app = wx.App(False)
 frame = MainWindow(None, 'PirateScope')
