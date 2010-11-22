@@ -22,8 +22,8 @@ class BPO(Thread):
 	minV = 0.
 	maxV = 6.6
 
-	minPhase = -1.
-	maxPhase = 1.
+	phaseOffset = 0
+	trigV = 0
 
 	data = zeros(100)
 
@@ -67,39 +67,56 @@ class BPO(Thread):
 		elif self.mode == self.MODE_ONESHOT:
 			self.oneshot_sample()
 		
+	def getV(self):
 
-	def oneshot_sample(self):
+		resp = self.serdev.read(2)
+		roll(self.vbuffer,1)
+		vbuffer[0] = (ord(resp[0])*256 + ord(resp[1]))*6.6/1024
 
-		if self.sync == self.SYNC_NONE:
+		return vbuffer[0]
 
-			for i in range(len(self.data)):
-				resp = self.serdev.read(2)
-				self.data[i] = (ord(resp[0])*256 + ord(resp[1]))*6.6/1024
+	
+	def trig_check(self, thisV, lastV):
 
-				for s in range(self.skips):
-					resp = self.serdev.read(2)
+		if self.sync == self.SYNC_RISE:
+			return thisV >= trigV && lastV < trigV
+		else
+			return thisV <= trigV && lastV > trigV
+	
+	def trig_init(self):
 
-				if self.wantAbort:
-					self.shutdown()
-					return
-
+		if self.sync == self.SYNC_RISE:
+			return self.maxV
+		else:
+			return self.minV
+	
 
 	def continuous_sample(self):
 
-		if self.sync == self.SYNC_NONE:
+		while True:
 
-			while True:
+			if self.sync != self.SYNC_NONE:
 
-				for i in range(len(self.data)):
-					resp = self.serdev.read(2)
-					self.data[i] = (ord(resp[0])*256 + ord(resp[1]))*6.6/1024
+				phaseOffsetP = max(self.phaseOffset,0)
+				phaseOffsetN = -min(self.phaseOffset,0)
 
-					for s in range(self.skips):
-						resp = self.serdev.read(2)
+				while True:
 
-					if self.wantAbort:
-						self.shutdown()
-						return
+					thisV = self.getV()
+
+					if self.trig_check(thisV, lastV)
+							break
+					lastV = thisV
+
+				self.data[0:min(phaseOffsetN,len(data))] = vbuffer[max(0,phaseOffsetN-len(data)):phaseOffsetN]
+
+			for i in range(max(0,len(self.data)+min(0,phaseOffset))):
+				self.getV()
+
+			if self.wantAbort:
+				self.shutdown()
+				return
+
 
 
 	def abort(self):
@@ -138,57 +155,51 @@ class MainWindow(wx.Frame):
 
 		# Set up plot window:
 		self.plotpanel = wx.Panel(self.panel)
+		self.plotpanel.SetBackgroundColour('white')
 		self.plot = plot.PlotCanvas(self.plotpanel)
+		self.plot.SetGridColour('grey')
+
+		self.TriggerLevSlider = wx.Slider(self.plotpanel, wx.ID_ANY, 0, 0, 660,
+				style = wx.SL_VERTICAL | wx.SL_INVERSE)
 
 		# Plot window panel sizers:
-		self.plotsizer = wx.BoxSizer(wx.VERTICAL)
+		self.plotsizer = wx.BoxSizer(wx.HORIZONTAL)
 		self.plotsizer.Add(self.plot, 1, wx.EXPAND)
+		self.plotsizer.Add(self.TriggerLevSlider, 0, wx.EXPAND | wx.BOTTOM, 20)
 		self.plotpanel.SetSizer(self.plotsizer)
 
 		# Set up oscilloscope controls:
 		self.contpanel = wx.Panel(self.panel, style=wx.BORDER_SUNKEN)
 		self.SampleButton = wx.ToggleButton(self.contpanel, wx.ID_ANY, 'SAMPLE')
 		self.SampleButton.SetBackgroundColour('green')
+
 		self.SamplingBox = wx.StaticBox(self.contpanel, wx.ID_ANY, 'Sampling')
 		self.RB_continuous = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Continuous', style=wx.RB_GROUP)
 		self.RB_singleshot = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Single shot')
-		self.RateSlider = wx.Slider(self.contpanel, wx.ID_ANY, BPO.maxRate, BPO.minRate, BPO.maxRate,
-				style=wx.SL_VERTICAL,
-				size=(-1,100))
 		self.FreqCheckBox = wx.CheckBox(self.contpanel, wx.ID_ANY, 'Spectrum')
+
 		self.TriggeringBox = wx.StaticBox(self.contpanel, wx.ID_ANY, 'Triggering')
 		self.RB_trigoff = wx.RadioButton(self.contpanel, wx.ID_ANY, 'No sync', style=wx.RB_GROUP)
 		self.RB_trigrise = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Rising edge')
 		self.RB_trigfall = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Falling edge')
-		self.TrigLevSlider = wx.Slider(self.contpanel, wx.ID_ANY, BPO.minV, BPO.minV, BPO.maxV,
-				style=wx.SL_VERTICAL,
-				size=(-1, 100))
-		self.PhaseSlider = wx.Slider(self.contpanel, wx.ID_ANY, 0, BPO.minPhase, BPO.maxPhase,
-				style=wx.SL_VERTICAL,
-				size=(-1,100))
 
 		# Oscilloscope controls panel sizers:
 		self.contsizer = wx.BoxSizer(wx.HORIZONTAL)
 		self.contsizer.Add(self.SampleButton, 0, wx.EXPAND | wx.ALL, 20)
-		self.contpanel.SetSizer(self.contsizer)
-		self.SamplingBoxSizer = wx.StaticBoxSizer(self.SamplingBox, wx.HORIZONTAL)
-		self.SamplingBoxSizer2 = wx.BoxSizer(wx.VERTICAL)
-		self.SamplingBoxSizer2.Add(self.RB_continuous, 1)
-		self.SamplingBoxSizer2.Add(self.RB_singleshot, 1)
-		self.SamplingBoxSizer2.Add(self.FreqCheckBox, 1)
-		self.SamplingBoxSizer.Add(self.SamplingBoxSizer2, 1, wx.EXPAND)
-		self.SamplingBoxSizer.Add(self.RateSlider, 0, wx.EXPAND)
+
+		self.SamplingBoxSizer = wx.StaticBoxSizer(self.SamplingBox, wx.VERTICAL)
+		self.SamplingBoxSizer.Add(self.RB_continuous, 1)
+		self.SamplingBoxSizer.Add(self.RB_singleshot, 1)
+		self.SamplingBoxSizer.Add(self.FreqCheckBox, 1)
 		self.contsizer.Add(self.SamplingBoxSizer, 1, wx.EXPAND | wx.RIGHT, 20)
 
-		self.TriggeringBoxSizer = wx.StaticBoxSizer(self.TriggeringBox, wx.HORIZONTAL)
-		self.TriggeringBoxSizer2 = wx.BoxSizer(wx.VERTICAL)
-		self.TriggeringBoxSizer2.Add(self.RB_trigoff,1)
-		self.TriggeringBoxSizer2.Add(self.RB_trigrise,1)
-		self.TriggeringBoxSizer2.Add(self.RB_trigfall,1)
-		self.TriggeringBoxSizer.Add(self.TriggeringBoxSizer2, 1, wx.EXPAND)
-		self.TriggeringBoxSizer.Add(self.TrigLevSlider, 0, wx.EXPAND)
-		self.TriggeringBoxSizer.Add(self.PhaseSlider, 0, wx.EXPAND)
+		self.TriggeringBoxSizer = wx.StaticBoxSizer(self.TriggeringBox, wx.VERTICAL)
+		self.TriggeringBoxSizer.Add(self.RB_trigoff,1)
+		self.TriggeringBoxSizer.Add(self.RB_trigrise,1)
+		self.TriggeringBoxSizer.Add(self.RB_trigfall,1)
 		self.contsizer.Add(self.TriggeringBoxSizer, 1, wx.EXPAND)
+
+		self.contpanel.SetSizer(self.contsizer)
 
 		# Main panel sizers:
 		self.sizer = wx.BoxSizer(wx.VERTICAL)
@@ -211,26 +222,50 @@ class MainWindow(wx.Frame):
 
 	def MenuSetup(self):
 
-		# Set up menus:
+		# Create menu bar:
+		menuBar = wx.MenuBar()
+
+		# File menu:
 		filemenu = wx.Menu()
 		menuItemSave = filemenu.Append(wx.ID_ANY, "&Save", "Save sample to file")
 		menuItemSave.Enable(False)
+
 		filemenu.AppendSeparator()
+
 		menuItemExit = filemenu.Append(wx.ID_EXIT, "E&xit", "Terminate the program.")
-		helpmenu = wx.Menu()
-		menuItemAbout = helpmenu.Append(wx.ID_ABOUT, "&About", "Information about this program.")
-		menuBar = wx.MenuBar()
-		menuBar.Append(filemenu, "&File")
-		menuBar.Append(helpmenu, "&Help")
-		self.SetMenuBar(menuBar)
-		self.Bind(wx.EVT_MENU, self.OnAbout, menuItemAbout)
 		self.Bind(wx.EVT_MENU, self.OnExit, menuItemExit)
-	
+
+		menuBar.Append(filemenu, "&File")
+
+		# View menu:
+		viewmenu = wx.Menu()
+		self.menuItemViewGrid = viewmenu.Append(wx.ID_ANY, '&Grid', 'Toggle grid', kind=wx.ITEM_CHECK)
+		self.Bind(wx.EVT_MENU, self.OnViewGrid, self.menuItemViewGrid)
+
+		menuBar.Append(viewmenu, '&View')
+
+		# Help menu:
+		helpmenu = wx.Menu()
+
+		menuItemAbout = helpmenu.Append(wx.ID_ABOUT, "&About", "Information about this program.")
+		self.Bind(wx.EVT_MENU, self.OnAbout, menuItemAbout)
+
+		menuBar.Append(helpmenu, "&Help")
+
+		# Assign menubar to frame:
+		self.SetMenuBar(menuBar)
+
 	def ClearPlot(self):
 
 		gc = plot.PlotGraphics([], '', 'Sample', 'Voltage')
 		self.plot.Draw(gc, xAxis=(0,100), yAxis=(-1,7))
-	
+
+	def OnViewGrid(self, event):
+
+		if self.menuItemViewGrid.IsChecked():
+			self.plot.SetEnableGrid(True)
+		else:
+			self.plot.SetEnableGrid(False)
 
 	def OnAbout(self, event):
 
@@ -269,7 +304,7 @@ terms of the GNU General Public License.
 
 			# Fire up oscilloscope:
 			try: 
-				self.bpo = BPO(self.port, 2, BPO.MODE_CONTINUOUS, BPO.SYNC_NONE)
+				self.bpo = BPO(self.port, 0, BPO.MODE_CONTINUOUS, BPO.SYNC_NONE)
 			except:
 				msg = "Failed to open Bus Pirate port '" + self.port + "'.\nCheck USB connection."
 				dlg = wx.MessageDialog(self, msg, "Error", wx.OK)
