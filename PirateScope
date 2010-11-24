@@ -70,52 +70,68 @@ class BPO(Thread):
 	def getV(self):
 
 		resp = self.serdev.read(2)
-		roll(self.vbuffer,1)
-		vbuffer[0] = (ord(resp[0])*256 + ord(resp[1]))*6.6/1024
+		return (ord(resp[0])*256 + ord(resp[1])*6.6/1024)
 
-		return vbuffer[0]
 
-	
 	def trig_check(self, thisV, lastV):
 
 		if self.sync == self.SYNC_RISE:
-			return thisV >= trigV && lastV < trigV
-		else
-			return thisV <= trigV && lastV > trigV
-	
+			return (thisV >= trigV) and (lastV < trigV)
+		else:
+			return (thisV <= trigV) and (lastV > trigV)
+
+
 	def trig_init(self):
 
 		if self.sync == self.SYNC_RISE:
 			return self.maxV
 		else:
 			return self.minV
-	
+
 
 	def continuous_sample(self):
 
 		while True:
 
+			phaseOffsetP = max(self.phaseOffset,0)
+			phaseOffsetN = -min(self.phaseOffset,0)
+
 			if self.sync != self.SYNC_NONE:
 
-				phaseOffsetP = max(self.phaseOffset,0)
-				phaseOffsetN = -min(self.phaseOffset,0)
+				#len(vbuffer) == phaseOffsetN+1
+
+				# Wait for trigger condition:
 
 				while True:
 
 					thisV = self.getV()
+					if (phaseOffsetN):
+						roll(vbuffer,1)
+						vbuffer[0] = thisV
 
-					if self.trig_check(thisV, lastV)
+					if self.trig_check(thisV, lastV):
 							break
 					lastV = thisV
 
-				self.data[0:min(phaseOffsetN,len(data))] = vbuffer[max(0,phaseOffsetN-len(data)):phaseOffsetN]
+					if self.wantAbort:
+						self.shutdown()
+						return
 
-			for i in range(max(0,len(self.data)+min(0,phaseOffset))):
-				self.getV()
+				# Adjust to account for positive phase offset:
 
-			if self.wantAbort:
-				self.shutdown()
-				return
+				for i in range(phaseOffsetP):
+					self.getV()
+
+				# Add aquired data:
+
+				self.data[0:phaseOffsetN] = vbuffer
+
+			for i in range(phaseOffsetP,len(self.data)):
+				self.data[i] = self.getV()
+
+				if self.wantAbort:
+					self.shutdown()
+					return
 
 
 
