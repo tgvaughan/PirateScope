@@ -93,12 +93,11 @@ class BPO(Thread):
 
 		while True:
 
-			phaseOffsetP = max(self.phaseOffset,0)
-			phaseOffsetN = -min(self.phaseOffset,0)
-
 			if self.sync != self.SYNC_NONE:
 
-				#len(vbuffer) == phaseOffsetN+1
+				phaseOffsetP = max(self.phaseOffset,0)
+				phaseOffsetN = -min(self.phaseOffset,0)
+				vbuffer = zeros(phaseOffsetP)
 
 				# Wait for trigger condition:
 
@@ -126,13 +125,19 @@ class BPO(Thread):
 
 				self.data[0:phaseOffsetN] = vbuffer
 
-			for i in range(phaseOffsetP,len(self.data)):
-				self.data[i] = self.getV()
+				for i in range(phaseOffsetP,len(self.data)):
+					self.data[i] = self.getV()
 
-				if self.wantAbort:
-					self.shutdown()
-					return
+					if self.wantAbort:
+						self.shutdown()
+						return
+			else:
+				for i in range(len(self.data)):
+					self.data[i] = self.getV()
 
+					if self.wantAbort:
+						self.shutdown()
+						return
 
 
 	def abort(self):
