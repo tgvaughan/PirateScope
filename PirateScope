@@ -6,6 +6,7 @@ import serial, time, sys
 from threading import Thread
 
 from numpy import *
+from numpy.fft import fft
 
 class BPO(Thread):
 
@@ -26,7 +27,7 @@ class BPO(Thread):
 	trigV = 0
 
 
-	def __init__(self, port, skips, mode, sync, trigV):
+	def __init__(self, port, skips, mode, sync, trigV, phaseOffset):
 
 		# Open BP serial device:
 		try:
@@ -43,6 +44,7 @@ class BPO(Thread):
 		self.mode = mode
 		self.sync = sync
 		self.trigV = trigV
+		self.phaseOffset = phaseOffset
 		self.data = nan*ones(100)
 
 		# Enter binary scripting mode:
@@ -63,10 +65,16 @@ class BPO(Thread):
 	def run(self):
 
 		if self.mode == self.MODE_CONTINUOUS:
-			self.continuous_sample()
+			while True:
+				self.sample()
+				if self.wantAbort:
+					self.shutdown()
+					return
 
 		elif self.mode == self.MODE_ONESHOT:
-			self.oneshot_sample()
+			self.sample()
+			self.shutdown()
+			return
 		
 	def getV(self):
 
@@ -90,57 +98,67 @@ class BPO(Thread):
 			return self.minV
 
 
-	def continuous_sample(self):
+	def sample(self):
 
-		while True:
+		if self.sync != self.SYNC_NONE:
 
-			if self.sync != self.SYNC_NONE:
+			phaseOffsetP = max(self.phaseOffset,0)
+			phaseOffsetN = -min(self.phaseOffset,0)
+			vbuffer = zeros(phaseOffsetN)
 
-				phaseOffsetP = max(self.phaseOffset,0)
-				phaseOffsetN = -min(self.phaseOffset,0)
-				vbuffer = nan*ones(phaseOffsetP)
+			# Pad out buffer to account for negative phase offset:
 
-				# Wait for trigger condition:
+			for i in range(phaseOffsetN):
+				thisV = self.getV()
+				vbuffer = roll(vbuffer,1)
+				vbuffer[0] = thisV
 
-				lastV = self.trig_init()
+			# Wait for trigger condition:
 
-				while True:
+			lastV = self.trig_init()
 
-					thisV = self.getV()
-					if (phaseOffsetN):
-						roll(vbuffer,1)
-						vbuffer[0] = thisV
+			while True:
 
-					if self.trig_check(thisV, lastV) or self.sync == self.SYNC_NONE:
-							break
-					lastV = thisV
+				thisV = self.getV()
+				if phaseOffsetN:
+					vbuffer = roll(vbuffer,1)
+					vbuffer[0] = thisV
 
-					if self.wantAbort:
-						self.shutdown()
-						return
+				if self.trig_check(thisV, lastV) or self.sync == self.SYNC_NONE:
+						break
+				lastV = thisV
 
-				# Adjust to account for positive phase offset:
+				if self.wantAbort:
+					return
 
-				for i in range(phaseOffsetP):
-					self.getV()
+			# Adjust to account for positive phase offset:
 
-				# Add aquired data:
+			for i in range(phaseOffsetP):
+				self.getV()
 
-				self.data[0:phaseOffsetN] = vbuffer
+				if self.wantAbort:
+					return
 
-				for i in range(phaseOffsetP,len(self.data)):
-					self.data[i] = self.getV()
+			# Add negative-offset data:
 
-					if self.wantAbort:
-						self.shutdown()
-						return
-			else:
-				for i in range(len(self.data)):
-					self.data[i] = self.getV()
+			self.data[0:phaseOffsetN] = vbuffer[phaseOffsetN-1::-1]
 
-					if self.wantAbort:
-						self.shutdown()
-						return
+			# Acquire data to fill remainder of buffer:
+
+			for i in range(phaseOffsetN,len(self.data)):
+				self.data[i] = self.getV()
+
+				if self.wantAbort:
+					return
+		else:
+
+			# Acquire data:
+
+			for i in range(len(self.data)):
+				self.data[i] = self.getV()
+
+				if self.wantAbort:
+					return
 
 
 	def abort(self):
@@ -156,12 +174,24 @@ class BPO(Thread):
 		time.sleep(0.1)
 		self.serdev.flushInput()
 		self.serdev.close()
+	
+	def SetSync(self, newSync):
+		self.sync = newSync
+	
+	def SetTrig(self, newTrig):
+		self.trigV = newTrig
+
+	def SetPhaseOffset(self, newOffset):
+		self.phaseOffset = newOffset
 
 
 class MainWindow(wx.Frame):
 
 	# Define Bus Pirate port (temporary)
 	port = '/dev/bus_pirate'
+
+	# Property to hold BPO instance:
+	bpo = None
 
 	def __init__(self, parent, title):
 
@@ -200,28 +230,49 @@ class MainWindow(wx.Frame):
 
 		self.SamplingBox = wx.StaticBox(self.contpanel, wx.ID_ANY, 'Sampling')
 		self.RB_continuous = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Continuous', style=wx.RB_GROUP)
-		self.RB_singleshot = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Single shot')
-		self.FreqCheckBox = wx.CheckBox(self.contpanel, wx.ID_ANY, 'Spectrum')
+		self.RB_oneshot = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Single shot')
+		self.FFTCheckBox = wx.CheckBox(self.contpanel, wx.ID_ANY, 'Spectrum')
+		self.FreqSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Rate (Hz):')
+		self.FreqSpinCtrl = wx.SpinCtrl(self.contpanel, wx.ID_ANY,
+				initial=6000, min=1, max=6000,
+				size=(60,-1))
 
 		self.TriggeringBox = wx.StaticBox(self.contpanel, wx.ID_ANY, 'Triggering')
 		self.RB_trigoff = wx.RadioButton(self.contpanel, wx.ID_ANY, 'No sync', style=wx.RB_GROUP)
 		self.RB_trigrise = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Rising edge')
 		self.RB_trigfall = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Falling edge')
+		self.PhaseSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Offset:')
+		self.PhaseSpinCtrl = wx.SpinCtrl(self.contpanel, wx.ID_ANY,
+				initial=0, min=-100, max=100,
+				size=(50,-1))
+		
 
 		# Oscilloscope controls panel sizers:
 		self.contsizer = wx.BoxSizer(wx.HORIZONTAL)
 		self.contsizer.Add(self.SampleButton, 0, wx.EXPAND | wx.ALL, 20)
 
-		self.SamplingBoxSizer = wx.StaticBoxSizer(self.SamplingBox, wx.VERTICAL)
-		self.SamplingBoxSizer.Add(self.RB_continuous, 1)
-		self.SamplingBoxSizer.Add(self.RB_singleshot, 1)
-		self.SamplingBoxSizer.Add(self.FreqCheckBox, 1)
+		self.SamplingBoxSizer = wx.StaticBoxSizer(self.SamplingBox, wx.HORIZONTAL)
+		self.SamplingBoxSizer2 = wx.BoxSizer(wx.VERTICAL)
+		self.SamplingBoxSizer2.Add(self.RB_continuous, 1)
+		self.SamplingBoxSizer2.Add(self.RB_oneshot, 1)
+		self.SamplingBoxSizer2.Add(self.FFTCheckBox, 1)
+		self.SamplingBoxSizer.Add(self.SamplingBoxSizer2, 1, wx.EXPAND)
+		self.SamplingBoxSizer3 = wx.BoxSizer(wx.VERTICAL)
+		self.SamplingBoxSizer3.Add(self.FreqSpinCtrlText)
+		self.SamplingBoxSizer3.Add(self.FreqSpinCtrl)
+		self.SamplingBoxSizer.Add(self.SamplingBoxSizer3, 0, wx.EXPAND)
 		self.contsizer.Add(self.SamplingBoxSizer, 1, wx.EXPAND | wx.RIGHT, 20)
 
-		self.TriggeringBoxSizer = wx.StaticBoxSizer(self.TriggeringBox, wx.VERTICAL)
-		self.TriggeringBoxSizer.Add(self.RB_trigoff,1)
-		self.TriggeringBoxSizer.Add(self.RB_trigrise,1)
-		self.TriggeringBoxSizer.Add(self.RB_trigfall,1)
+		self.TriggeringBoxSizer = wx.StaticBoxSizer(self.TriggeringBox, wx.HORIZONTAL)
+		self.TriggeringBoxSizer2 = wx.BoxSizer(wx.VERTICAL)
+		self.TriggeringBoxSizer2.Add(self.RB_trigoff,1)
+		self.TriggeringBoxSizer2.Add(self.RB_trigrise,1)
+		self.TriggeringBoxSizer2.Add(self.RB_trigfall,1)
+		self.TriggeringBoxSizer.Add(self.TriggeringBoxSizer2, 1, wx.EXPAND)
+		self.TriggeringBoxSizer3 = wx.BoxSizer(wx.VERTICAL)
+		self.TriggeringBoxSizer3.Add(self.PhaseSpinCtrlText)
+		self.TriggeringBoxSizer3.Add(self.PhaseSpinCtrl)
+		self.TriggeringBoxSizer.Add(self.TriggeringBoxSizer3, 0, wx.EXPAND)
 		self.contsizer.Add(self.TriggeringBoxSizer, 1, wx.EXPAND)
 
 		self.contpanel.SetSizer(self.contsizer)
@@ -234,10 +285,13 @@ class MainWindow(wx.Frame):
 
 		# Bind event handlers:
 		self.Bind(wx.EVT_TOGGLEBUTTON, self.OnSampleButton, self.SampleButton)
+		self.Bind(wx.EVT_RADIOBUTTON, self.OnSampContinuous, self.RB_continuous) 
+		self.Bind(wx.EVT_RADIOBUTTON, self.OnSampOneShot, self.RB_oneshot) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigRise, self.RB_trigrise) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigFall, self.RB_trigfall) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigOff, self.RB_trigoff) 
 		self.Bind(wx.EVT_SLIDER, self.OnTrigLevAdjust, self.TrigLevSlider) 
+		self.Bind(wx.EVT_SPINCTRL, self.OnPhaseAdjust, self.PhaseSpinCtrl)
 
 		# Draw empty plot:
 		self.ClearPlot()
@@ -277,6 +331,10 @@ class MainWindow(wx.Frame):
 				'&Trigger Level', 'Toggle trigger level visibility',
 				kind=wx.ITEM_CHECK)
 		self.Bind(wx.EVT_MENU, self.OnViewTrigLev, self.menuItemViewTrigLev)
+		self.menuItemViewTrigOrig = viewmenu.Append(wx.ID_ANY,
+				'Trigger &Origin', 'Toggle trigger origin visibility',
+				kind=wx.ITEM_CHECK)
+		self.Bind(wx.EVT_MENU, self.OnViewTrigOrig, self.menuItemViewTrigOrig)
 
 		menuBar.Append(viewmenu, '&View')
 
@@ -295,23 +353,36 @@ class MainWindow(wx.Frame):
 		self.mode = BPO.MODE_CONTINUOUS
 		self.sync = BPO.SYNC_NONE
 		self.trigV = 0.5*(BPO.maxV-BPO.minV)
+		self.phaseOffset = 0
 
 	def ClearPlot(self):
 
+		if self.bpo != None:
+			data = [(i,self.bpo.data[i]) for i in range(len(self.bpo.data))]
+		else:
+			data = [(0,nan),(100,nan)]
+
+		plotlist = [plot.PolyLine(data, colour='blue', width=2)]
 
 		if self.menuItemViewTrigLev.IsChecked():
 			triglev_dat = [(0,self.trigV),(100,self.trigV)]
-			triglev_line = plot.PolyLine(triglev_dat, colour='red', style=wx.LONG_DASH, width=1)
-			gc = plot.PlotGraphics([triglev_line], '', 'Sample', 'Voltage')
-		else:
-			gc = plot.PlotGraphics([], '', 'Sample', 'Voltage')
+			plotlist.append(plot.PolyLine(triglev_dat, colour='red', style=wx.LONG_DASH, width=1))
 
+		if self.menuItemViewTrigOrig.IsChecked():
+			trigorig_dat = [(-self.phaseOffset,-1),(-self.phaseOffset,7)]
+			plotlist.append(plot.PolyLine(trigorig_dat, colour='red', style=wx.LONG_DASH, width=1))
+
+		gc = plot.PlotGraphics(plotlist, '', 'Sample', 'Voltage')
 		self.plot.Draw(gc, xAxis=(0,100), yAxis=(-1,7))
 
 	def OnViewGrid(self, event):
 		self.plot.SetEnableGrid(self.menuItemViewGrid.IsChecked())
 
 	def OnViewTrigLev(self, event):
+		if not self.SampleButton.GetValue():
+			self.ClearPlot()
+	
+	def OnViewTrigOrig(self, event):
 		if not self.SampleButton.GetValue():
 			self.ClearPlot()
 
@@ -340,18 +411,31 @@ terms of the GNU General Public License.
 	
 	def OnUpdate(self, event):
 
-		data = [(i,self.bpo.data[i]) for i in range(len(self.bpo.data))]
+		if self.bpo.isAlive():
+			data = [(i,self.bpo.data[i]) for i in range(len(self.bpo.data))]
 
-		line = plot.PolyLine(data, colour='blue', width=2)
+			plotlist = [plot.PolyLine(data, colour='blue', width=2)]
 
-		if self.menuItemViewTrigLev.IsChecked():
-			triglev_dat = [(0,self.trigV),(100,self.trigV)]
-			triglev_line = plot.PolyLine(triglev_dat, colour='red', style=wx.LONG_DASH, width=1)
-			gc = plot.PlotGraphics([line, triglev_line], '', 'Sample', 'Voltage')
+			if self.menuItemViewTrigLev.IsChecked():
+				triglev_dat = [(0,self.trigV),(100,self.trigV)]
+				plotlist.append(plot.PolyLine(triglev_dat, colour='red', style=wx.LONG_DASH, width=1))
+
+			if self.menuItemViewTrigOrig.IsChecked():
+				trigorig_dat = [(-self.phaseOffset,-1),(-self.phaseOffset,7)]
+				plotlist.append(plot.PolyLine(trigorig_dat, colour='red', style=wx.LONG_DASH, width=1))
+
+			gc = plot.PlotGraphics(plotlist, '', 'Sample', 'Voltage')
+			self.plot.Draw(gc, xAxis=(0,100), yAxis=(-1,7))
 		else:
-			gc = plot.PlotGraphics([line], '', 'Sample', 'Voltage')
+			self.timer.Stop()
 
-		self.plot.Draw(gc, xAxis=(0,100), yAxis=(-1,7))
+			# Turn button off and green:
+			self.SampleButton.SetValue(False)
+			self.SampleButton.SetBackgroundColour('green')
+
+			# Display "SAMPLING"
+			self.SampleButton.SetLabel('SAMPLING')
+
 
 	def OnSampleButton(self, event):
 
@@ -359,7 +443,7 @@ terms of the GNU General Public License.
 
 			# Fire up oscilloscope:
 			try: 
-				self.bpo = BPO(self.port, 0, self.mode, self.sync, self.trigV)
+				self.bpo = BPO(self.port, 0, self.mode, self.sync, self.trigV, self.phaseOffset)
 			except:
 				msg = "Failed to open Bus Pirate port '" + self.port + "'.\nCheck USB connection."
 				dlg = wx.MessageDialog(self, msg, "Error", wx.OK)
@@ -375,40 +459,62 @@ terms of the GNU General Public License.
 			# Display "STOP SAMPLING"
 			self.SampleButton.SetLabel('    STOP\nSAMPLING')
 
+			# If continuous sampling selected, disable one shot radio button:
+			if self.mode == BPO.MODE_CONTINUOUS:
+				self.RB_oneshot.Disable()
+
 			# Start plot timer (0.1s intervals):
 			self.timer.Start(milliseconds=100)
 
 		else:
-			self.timer.Stop()
-			self.bpo.abort()
-			self.ClearPlot()
+			if self.bpo.isAlive():
+				self.timer.Stop()
+				self.bpo.abort()
+				self.ClearPlot()
 
-			# Turn button green:
-			self.SampleButton.SetBackgroundColour('green')
+				# Turn button green:
+				self.SampleButton.SetBackgroundColour('green')
 
-			# Display "SAMPLING"
-			self.SampleButton.SetLabel('SAMPLING')
+				# Display "SAMPLING"
+				self.SampleButton.SetLabel('SAMPLING')
+
+				# Ensure one shot radio button is enabled:
+				self.RB_oneshot.Enable()
+
 	
+	def OnSampContinuous(self, event):
+		self.mode = BPO.MODE_CONTINUOUS
+
+	def OnSampOneShot(self, event):
+		self.mode = BPO.MODE_ONESHOT
+
 	def OnTrigRise(self, event):
 		self.sync = BPO.SYNC_RISE
 		if self.SampleButton.GetValue():
-			self.bpo.sync = self.sync
+			self.bpo.SetSync(self.sync)
 
 	def OnTrigFall(self, event):
 		self.sync = BPO.SYNC_FALL
 		if self.SampleButton.GetValue():
-			self.bpo.sync = self.sync
+			self.bpo.SetSync(self.sync)
 
 	def OnTrigOff(self, event):
 		self.sync = BPO.SYNC_NONE
 		if self.SampleButton.GetValue():
-			self.bpo.sync = self.sync
+			self.bpo.SetSync(self.sync)
 	
 	def OnTrigLevAdjust(self, event):
 		self.trigV = self.TrigLevSlider.GetValue()/100.
 		if self.SampleButton.GetValue():
-			self.bpo.trigV = self.trigV
+			self.bpo.SetTrig(self.trigV)
 		elif self.menuItemViewTrigLev.IsChecked():
+			self.ClearPlot()
+	
+	def OnPhaseAdjust(self, event):
+		self.phaseOffset = self.PhaseSpinCtrl.GetValue()
+		if self.bpo != None and self.bpo.isAlive():
+			self.bpo.SetPhaseOffset(self.phaseOffset)
+		elif self.menuItemViewTrigOrig.IsChecked():
 			self.ClearPlot()
 
 
