@@ -20,28 +20,30 @@ class BPO(Thread):
 	maxRate = 5720.
 
 	minV = 0.
-	maxV = 6.6
+	maxV = 6.
 
 	phaseOffset = 0
 	trigV = 0
 
-	data = zeros(100)
 
-	def __init__(self, port, skips, mode, sync):
+	def __init__(self, port, skips, mode, sync, trigV):
 
 		# Open BP serial device:
 		try:
 			self.serdev = serial.Serial(port=port, baudrate=115200)
 		except:
+			# Leave exception for calling function to deal with:
 			raise
 
-
+		# Perform default thread initialization:
 		Thread.__init__(self)
 
 		# Set oscilloscope options
+		self.skips = skips
 		self.mode = mode
 		self.sync = sync
-		self.skips = skips
+		self.trigV = trigV
+		self.data = nan*ones(100)
 
 		# Enter binary scripting mode:
 		self.serdev.write('\n\n')
@@ -58,7 +60,6 @@ class BPO(Thread):
 
 		self.start()
 
-
 	def run(self):
 
 		if self.mode == self.MODE_CONTINUOUS:
@@ -70,15 +71,15 @@ class BPO(Thread):
 	def getV(self):
 
 		resp = self.serdev.read(2)
-		return (ord(resp[0])*256 + ord(resp[1])*6.6/1024)
+		return (ord(resp[0])*256 + ord(resp[1]))*6.6/1024
 
 
 	def trig_check(self, thisV, lastV):
 
 		if self.sync == self.SYNC_RISE:
-			return (thisV >= trigV) and (lastV < trigV)
+			return (thisV >= self.trigV) and (lastV < self.trigV)
 		else:
-			return (thisV <= trigV) and (lastV > trigV)
+			return (thisV <= self.trigV) and (lastV > self.trigV)
 
 
 	def trig_init(self):
@@ -97,9 +98,11 @@ class BPO(Thread):
 
 				phaseOffsetP = max(self.phaseOffset,0)
 				phaseOffsetN = -min(self.phaseOffset,0)
-				vbuffer = zeros(phaseOffsetP)
+				vbuffer = nan*ones(phaseOffsetP)
 
 				# Wait for trigger condition:
+
+				lastV = self.trig_init()
 
 				while True:
 
@@ -108,7 +111,7 @@ class BPO(Thread):
 						roll(vbuffer,1)
 						vbuffer[0] = thisV
 
-					if self.trig_check(thisV, lastV):
+					if self.trig_check(thisV, lastV) or self.sync == self.SYNC_NONE:
 							break
 					lastV = thisV
 
@@ -180,13 +183,14 @@ class MainWindow(wx.Frame):
 		self.plot = plot.PlotCanvas(self.plotpanel)
 		self.plot.SetGridColour('grey')
 
-		self.TriggerLevSlider = wx.Slider(self.plotpanel, wx.ID_ANY, 0, 0, 660,
+		self.TrigLevSlider = wx.Slider(self.plotpanel, wx.ID_ANY,
+				50.*(BPO.maxV-BPO.minV), 100.*BPO.minV, 100.*BPO.maxV,
 				style = wx.SL_VERTICAL | wx.SL_INVERSE)
 
 		# Plot window panel sizers:
 		self.plotsizer = wx.BoxSizer(wx.HORIZONTAL)
 		self.plotsizer.Add(self.plot, 1, wx.EXPAND)
-		self.plotsizer.Add(self.TriggerLevSlider, 0, wx.EXPAND | wx.BOTTOM, 20)
+		self.plotsizer.Add(self.TrigLevSlider, 0, wx.EXPAND | wx.BOTTOM, 20)
 		self.plotpanel.SetSizer(self.plotsizer)
 
 		# Set up oscilloscope controls:
@@ -230,6 +234,10 @@ class MainWindow(wx.Frame):
 
 		# Bind event handlers:
 		self.Bind(wx.EVT_TOGGLEBUTTON, self.OnSampleButton, self.SampleButton)
+		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigRise, self.RB_trigrise) 
+		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigFall, self.RB_trigfall) 
+		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigOff, self.RB_trigoff) 
+		self.Bind(wx.EVT_SLIDER, self.OnTrigLevAdjust, self.TrigLevSlider) 
 
 		# Draw empty plot:
 		self.ClearPlot()
@@ -237,6 +245,9 @@ class MainWindow(wx.Frame):
 		# Set up plot updating timer:
 		self.timer = wx.Timer(self)
 		self.Bind(wx.EVT_TIMER, self.OnUpdate, self.timer)
+
+		# Set up oscilloscope defaults:
+		self.OscilloscopeDefaultSetup()
 
 		self.Show(True)
 
@@ -262,6 +273,10 @@ class MainWindow(wx.Frame):
 		viewmenu = wx.Menu()
 		self.menuItemViewGrid = viewmenu.Append(wx.ID_ANY, '&Grid', 'Toggle grid', kind=wx.ITEM_CHECK)
 		self.Bind(wx.EVT_MENU, self.OnViewGrid, self.menuItemViewGrid)
+		self.menuItemViewTrigLev = viewmenu.Append(wx.ID_ANY,
+				'&Trigger Level', 'Toggle trigger level visibility',
+				kind=wx.ITEM_CHECK)
+		self.Bind(wx.EVT_MENU, self.OnViewTrigLev, self.menuItemViewTrigLev)
 
 		menuBar.Append(viewmenu, '&View')
 
@@ -275,18 +290,30 @@ class MainWindow(wx.Frame):
 
 		# Assign menubar to frame:
 		self.SetMenuBar(menuBar)
+	
+	def OscilloscopeDefaultSetup(self):
+		self.mode = BPO.MODE_CONTINUOUS
+		self.sync = BPO.SYNC_NONE
+		self.trigV = 0.5*(BPO.maxV-BPO.minV)
 
 	def ClearPlot(self):
 
-		gc = plot.PlotGraphics([], '', 'Sample', 'Voltage')
+
+		if self.menuItemViewTrigLev.IsChecked():
+			triglev_dat = [(0,self.trigV),(100,self.trigV)]
+			triglev_line = plot.PolyLine(triglev_dat, colour='red', style=wx.LONG_DASH, width=1)
+			gc = plot.PlotGraphics([triglev_line], '', 'Sample', 'Voltage')
+		else:
+			gc = plot.PlotGraphics([], '', 'Sample', 'Voltage')
+
 		self.plot.Draw(gc, xAxis=(0,100), yAxis=(-1,7))
 
 	def OnViewGrid(self, event):
+		self.plot.SetEnableGrid(self.menuItemViewGrid.IsChecked())
 
-		if self.menuItemViewGrid.IsChecked():
-			self.plot.SetEnableGrid(True)
-		else:
-			self.plot.SetEnableGrid(False)
+	def OnViewTrigLev(self, event):
+		if not self.SampleButton.GetValue():
+			self.ClearPlot()
 
 	def OnAbout(self, event):
 
@@ -316,7 +343,14 @@ terms of the GNU General Public License.
 		data = [(i,self.bpo.data[i]) for i in range(len(self.bpo.data))]
 
 		line = plot.PolyLine(data, colour='blue', width=2)
-		gc = plot.PlotGraphics([line], '', 'Sample', 'Voltage')
+
+		if self.menuItemViewTrigLev.IsChecked():
+			triglev_dat = [(0,self.trigV),(100,self.trigV)]
+			triglev_line = plot.PolyLine(triglev_dat, colour='red', style=wx.LONG_DASH, width=1)
+			gc = plot.PlotGraphics([line, triglev_line], '', 'Sample', 'Voltage')
+		else:
+			gc = plot.PlotGraphics([line], '', 'Sample', 'Voltage')
+
 		self.plot.Draw(gc, xAxis=(0,100), yAxis=(-1,7))
 
 	def OnSampleButton(self, event):
@@ -325,7 +359,7 @@ terms of the GNU General Public License.
 
 			# Fire up oscilloscope:
 			try: 
-				self.bpo = BPO(self.port, 0, BPO.MODE_CONTINUOUS, BPO.SYNC_NONE)
+				self.bpo = BPO(self.port, 0, self.mode, self.sync, self.trigV)
 			except:
 				msg = "Failed to open Bus Pirate port '" + self.port + "'.\nCheck USB connection."
 				dlg = wx.MessageDialog(self, msg, "Error", wx.OK)
@@ -354,7 +388,28 @@ terms of the GNU General Public License.
 
 			# Display "SAMPLING"
 			self.SampleButton.SetLabel('SAMPLING')
+	
+	def OnTrigRise(self, event):
+		self.sync = BPO.SYNC_RISE
+		if self.SampleButton.GetValue():
+			self.bpo.sync = self.sync
 
+	def OnTrigFall(self, event):
+		self.sync = BPO.SYNC_FALL
+		if self.SampleButton.GetValue():
+			self.bpo.sync = self.sync
+
+	def OnTrigOff(self, event):
+		self.sync = BPO.SYNC_NONE
+		if self.SampleButton.GetValue():
+			self.bpo.sync = self.sync
+	
+	def OnTrigLevAdjust(self, event):
+		self.trigV = self.TrigLevSlider.GetValue()/100.
+		if self.SampleButton.GetValue():
+			self.bpo.trigV = self.trigV
+		elif self.menuItemViewTrigLev.IsChecked():
+			self.ClearPlot()
 
 
 app = wx.App(False)
