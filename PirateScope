@@ -287,6 +287,7 @@ class MainWindow(wx.Frame):
 		self.Bind(wx.EVT_TOGGLEBUTTON, self.OnSampleButton, self.SampleButton)
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnSampContinuous, self.RB_continuous) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnSampOneShot, self.RB_oneshot) 
+		self.Bind(wx.EVT_CHECKBOX, self.OnFFTCheckBox, self.FFTCheckBox) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigRise, self.RB_trigrise) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigFall, self.RB_trigfall) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigOff, self.RB_trigoff) 
@@ -294,7 +295,7 @@ class MainWindow(wx.Frame):
 		self.Bind(wx.EVT_SPINCTRL, self.OnPhaseAdjust, self.PhaseSpinCtrl)
 
 		# Draw empty plot:
-		self.ClearPlot()
+		self.UpdatePlot()
 
 		# Set up plot updating timer:
 		self.timer = wx.Timer(self)
@@ -355,12 +356,21 @@ class MainWindow(wx.Frame):
 		self.trigV = 0.5*(BPO.maxV-BPO.minV)
 		self.phaseOffset = 0
 
-	def ClearPlot(self):
+	def UpdatePlot(self):
 
 		if self.bpo != None:
-			data = [(i,self.bpo.data[i]) for i in range(len(self.bpo.data))]
+			if not self.FFTCheckBox.IsChecked():
+				data = [(i,self.bpo.data[i]) for i in range(len(self.bpo.data))]
+				plotrange = (-1,7)
+			else:
+				fftresult = abs(fft(self.bpo.data))
+				data = [(i,fftresult[i]) for i in range(len(fftresult))]
+				plotrange = (0,max(fftresult))
+				if plotrange[1]==0.:
+					plotrange = (-1.,1.)
 		else:
-			data = [(0,nan),(100,nan)]
+			data = [(0,-1),(100,-1)]
+			plotrange = (-1,7)
 
 		plotlist = [plot.PolyLine(data, colour='blue', width=2)]
 
@@ -373,18 +383,18 @@ class MainWindow(wx.Frame):
 			plotlist.append(plot.PolyLine(trigorig_dat, colour='red', style=wx.LONG_DASH, width=1))
 
 		gc = plot.PlotGraphics(plotlist, '', 'Sample', 'Voltage')
-		self.plot.Draw(gc, xAxis=(0,100), yAxis=(-1,7))
+		self.plot.Draw(gc, xAxis=(0,100), yAxis=plotrange)
 
 	def OnViewGrid(self, event):
 		self.plot.SetEnableGrid(self.menuItemViewGrid.IsChecked())
 
 	def OnViewTrigLev(self, event):
 		if not self.SampleButton.GetValue():
-			self.ClearPlot()
+			self.UpdatePlot()
 	
 	def OnViewTrigOrig(self, event):
 		if not self.SampleButton.GetValue():
-			self.ClearPlot()
+			self.UpdatePlot()
 
 	def OnAbout(self, event):
 
@@ -411,22 +421,9 @@ terms of the GNU General Public License.
 	
 	def OnUpdate(self, event):
 
-		if self.bpo.isAlive():
-			data = [(i,self.bpo.data[i]) for i in range(len(self.bpo.data))]
+		self.UpdatePlot()
 
-			plotlist = [plot.PolyLine(data, colour='blue', width=2)]
-
-			if self.menuItemViewTrigLev.IsChecked():
-				triglev_dat = [(0,self.trigV),(100,self.trigV)]
-				plotlist.append(plot.PolyLine(triglev_dat, colour='red', style=wx.LONG_DASH, width=1))
-
-			if self.menuItemViewTrigOrig.IsChecked():
-				trigorig_dat = [(-self.phaseOffset,-1),(-self.phaseOffset,7)]
-				plotlist.append(plot.PolyLine(trigorig_dat, colour='red', style=wx.LONG_DASH, width=1))
-
-			gc = plot.PlotGraphics(plotlist, '', 'Sample', 'Voltage')
-			self.plot.Draw(gc, xAxis=(0,100), yAxis=(-1,7))
-		else:
+		if not self.bpo.isAlive():
 			self.timer.Stop()
 
 			# Turn button off and green:
@@ -470,7 +467,7 @@ terms of the GNU General Public License.
 			if self.bpo.isAlive():
 				self.timer.Stop()
 				self.bpo.abort()
-				self.ClearPlot()
+				self.UpdatePlot()
 
 				# Turn button green:
 				self.SampleButton.SetBackgroundColour('green')
@@ -487,6 +484,9 @@ terms of the GNU General Public License.
 
 	def OnSampOneShot(self, event):
 		self.mode = BPO.MODE_ONESHOT
+	
+	def OnFFTCheckBox(self, event):
+		self.UpdatePlot()
 
 	def OnTrigRise(self, event):
 		self.sync = BPO.SYNC_RISE
@@ -508,14 +508,14 @@ terms of the GNU General Public License.
 		if self.SampleButton.GetValue():
 			self.bpo.SetTrig(self.trigV)
 		elif self.menuItemViewTrigLev.IsChecked():
-			self.ClearPlot()
+			self.UpdatePlot()
 	
 	def OnPhaseAdjust(self, event):
 		self.phaseOffset = self.PhaseSpinCtrl.GetValue()
 		if self.bpo != None and self.bpo.isAlive():
 			self.bpo.SetPhaseOffset(self.phaseOffset)
 		elif self.menuItemViewTrigOrig.IsChecked():
-			self.ClearPlot()
+			self.UpdatePlot()
 
 
 app = wx.App(False)
