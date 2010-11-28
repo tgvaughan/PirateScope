@@ -18,34 +18,27 @@ class BPO(Thread):
 	MODE_ONESHOT = 1
 
 	minRate = 1.
-	maxRate = 5720.
+	maxRate = 5500.
+	freqRes = 100.
 
 	minV = 0.
 	maxV = 6.
 
-	phaseOffset = 0
-	trigV = 0
-
-
-	def __init__(self, port, skips, mode, sync, trigV, phaseOffset):
+	def __init__(self, port, rate, mode, sync, trigV, phaseOffset):
 
 		# Open BP serial device:
-		try:
-			self.serdev = serial.Serial(port=port, baudrate=115200)
-		except:
-			# Leave exception for calling function to deal with:
-			raise
+		self.serdev = serial.Serial(port=port, baudrate=115200)
 
 		# Perform default thread initialization:
 		Thread.__init__(self)
 
 		# Set oscilloscope options
-		self.skips = skips
 		self.mode = mode
 		self.sync = sync
 		self.trigV = trigV
 		self.phaseOffset = phaseOffset
-		self.data = nan*ones(100)
+		self.rate = rate
+		self.data = -1*ones(100)
 
 		# Enter binary scripting mode:
 		self.serdev.write('\n\n')
@@ -59,8 +52,10 @@ class BPO(Thread):
 		time.sleep(0.1)
 
 		self.wantAbort = False
+		self.SetRate(rate)
 
 		self.start()
+
 
 	def run(self):
 
@@ -75,8 +70,18 @@ class BPO(Thread):
 			self.sample()
 			self.shutdown()
 			return
-		
+
+
 	def getV(self):
+
+		if self.FreqAdjust:
+			freqSkip = self.freqSkip # local copy to prevent divide by zeros
+						 # caused by external freq adjustment
+			while self.freqSkipIdx < freqSkip:
+				self.freqSkipIdx += 1
+				resp = self.serdev.read(2)
+
+			self.freqSkipIdx = (self.freqSkipIdx+1)%freqSkip
 
 		resp = self.serdev.read(2)
 		return (ord(resp[0])*256 + ord(resp[1]))*6.6/1024
@@ -88,7 +93,6 @@ class BPO(Thread):
 			return (thisV >= self.trigV) and (lastV < self.trigV)
 		else:
 			return (thisV <= self.trigV) and (lastV > self.trigV)
-
 
 	def trig_init(self):
 
@@ -174,7 +178,24 @@ class BPO(Thread):
 		time.sleep(0.1)
 		self.serdev.flushInput()
 		self.serdev.close()
-	
+
+
+	def SetRate(self, rate):
+
+		# Adjust sampling rate
+
+		rate = min(rate,self.maxRate)
+		rate = max(rate,self.minRate)
+
+		self.freqSkip = int(self.freqRes*(self.maxRate-rate)/self.maxRate)
+
+		if self.freqSkip>0:
+			self.FreqAdjust = True
+			self.freqSkipIdx = 0
+		else:
+			self.FreqAdjust = False
+
+
 	def SetSync(self, newSync):
 		self.sync = newSync
 	
@@ -232,9 +253,9 @@ class MainWindow(wx.Frame):
 		self.RB_continuous = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Continuous', style=wx.RB_GROUP)
 		self.RB_oneshot = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Single shot')
 		self.FFTCheckBox = wx.CheckBox(self.contpanel, wx.ID_ANY, 'Spectrum')
-		self.FreqSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Rate (Hz):')
-		self.FreqSpinCtrl = wx.SpinCtrl(self.contpanel, wx.ID_ANY,
-				initial=6000, min=1, max=6000,
+		self.RateSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Rate (Hz):')
+		self.RateSpinCtrl = wx.SpinCtrl(self.contpanel, wx.ID_ANY,
+				initial=BPO.maxRate, min=BPO.minRate, max=BPO.maxRate,
 				size=(60,-1))
 
 		self.TriggeringBox = wx.StaticBox(self.contpanel, wx.ID_ANY, 'Triggering')
@@ -258,8 +279,8 @@ class MainWindow(wx.Frame):
 		self.SamplingBoxSizer2.Add(self.FFTCheckBox, 1)
 		self.SamplingBoxSizer.Add(self.SamplingBoxSizer2, 1, wx.EXPAND)
 		self.SamplingBoxSizer3 = wx.BoxSizer(wx.VERTICAL)
-		self.SamplingBoxSizer3.Add(self.FreqSpinCtrlText)
-		self.SamplingBoxSizer3.Add(self.FreqSpinCtrl)
+		self.SamplingBoxSizer3.Add(self.RateSpinCtrlText)
+		self.SamplingBoxSizer3.Add(self.RateSpinCtrl)
 		self.SamplingBoxSizer.Add(self.SamplingBoxSizer3, 0, wx.EXPAND)
 		self.contsizer.Add(self.SamplingBoxSizer, 1, wx.EXPAND | wx.RIGHT, 20)
 
@@ -288,6 +309,7 @@ class MainWindow(wx.Frame):
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnSampContinuous, self.RB_continuous) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnSampOneShot, self.RB_oneshot) 
 		self.Bind(wx.EVT_CHECKBOX, self.OnFFTCheckBox, self.FFTCheckBox) 
+		self.Bind(wx.EVT_SPINCTRL, self.OnRateAdjust, self.RateSpinCtrl) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigRise, self.RB_trigrise) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigFall, self.RB_trigfall) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigOff, self.RB_trigoff) 
@@ -351,6 +373,7 @@ class MainWindow(wx.Frame):
 		self.SetMenuBar(menuBar)
 	
 	def OscilloscopeDefaultSetup(self):
+		self.rate = BPO.maxRate
 		self.mode = BPO.MODE_CONTINUOUS
 		self.sync = BPO.SYNC_NONE
 		self.trigV = 0.5*(BPO.maxV-BPO.minV)
@@ -358,31 +381,39 @@ class MainWindow(wx.Frame):
 
 	def UpdatePlot(self):
 
-		if self.bpo != None:
-			if not self.FFTCheckBox.IsChecked():
+		if not self.FFTCheckBox.IsChecked():
+			if self.bpo != None:
 				data = [(i,self.bpo.data[i]) for i in range(len(self.bpo.data))]
 				plotrange = (-1,7)
 			else:
-				fftresult = abs(fft(self.bpo.data))
-				data = [(i,fftresult[i]) for i in range(len(fftresult))]
-				plotrange = (0,max(fftresult))
-				if plotrange[1]==0.:
-					plotrange = (-1.,1.)
+				data = [(0,-1),(100,-1)]
+				plotrange = (-1,7)
+
+			plotlist = [plot.PolyLine(data, colour='blue', width=2)]
+
+			if self.menuItemViewTrigLev.IsChecked():
+				triglev_dat = [(0,self.trigV),(100,self.trigV)]
+				plotlist.append(plot.PolyLine(triglev_dat, colour='red', style=wx.LONG_DASH, width=1))
+
+			if self.menuItemViewTrigOrig.IsChecked():
+				trigorig_dat = [(-self.phaseOffset,-1),(-self.phaseOffset,7)]
+				plotlist.append(plot.PolyLine(trigorig_dat, colour='red', style=wx.LONG_DASH, width=1))
+
+			gc = plot.PlotGraphics(plotlist, '', 'Sample', 'Voltage')
 		else:
-			data = [(0,-1),(100,-1)]
-			plotrange = (-1,7)
+			if self.bpo != None:
+				fftresult = abs(fft(self.bpo.data))/sqrt(len(self.bpo.data))
+				data = [(i,fftresult[i]) for i in range(len(fftresult))]
+				plotrange = (-1,max(fftresult))
+				if plotrange[1]==0.:
+					plotrange = (-1,1)
+			else:
+				data = [(0,-1),(100,-1)]
+				plotrange = (0,1)
 
-		plotlist = [plot.PolyLine(data, colour='blue', width=2)]
+			plotlist = [plot.PolyLine(data, colour='purple', width=2)]
+			gc = plot.PlotGraphics(plotlist, '', 'Frequency', 'Amplitude')
 
-		if self.menuItemViewTrigLev.IsChecked():
-			triglev_dat = [(0,self.trigV),(100,self.trigV)]
-			plotlist.append(plot.PolyLine(triglev_dat, colour='red', style=wx.LONG_DASH, width=1))
-
-		if self.menuItemViewTrigOrig.IsChecked():
-			trigorig_dat = [(-self.phaseOffset,-1),(-self.phaseOffset,7)]
-			plotlist.append(plot.PolyLine(trigorig_dat, colour='red', style=wx.LONG_DASH, width=1))
-
-		gc = plot.PlotGraphics(plotlist, '', 'Sample', 'Voltage')
 		self.plot.Draw(gc, xAxis=(0,100), yAxis=plotrange)
 
 	def OnViewGrid(self, event):
@@ -440,7 +471,12 @@ terms of the GNU General Public License.
 
 			# Fire up oscilloscope:
 			try: 
-				self.bpo = BPO(self.port, 0, self.mode, self.sync, self.trigV, self.phaseOffset)
+				self.bpo = BPO(self.port,
+						self.rate,
+						self.mode,
+						self.sync,
+						self.trigV,
+						self.phaseOffset)
 			except:
 				msg = "Failed to open Bus Pirate port '" + self.port + "'.\nCheck USB connection."
 				dlg = wx.MessageDialog(self, msg, "Error", wx.OK)
@@ -509,6 +545,11 @@ terms of the GNU General Public License.
 			self.bpo.SetTrig(self.trigV)
 		elif self.menuItemViewTrigLev.IsChecked():
 			self.UpdatePlot()
+	
+	def OnRateAdjust(self, event):
+		self.rate = self.RateSpinCtrl.GetValue()
+		if self.bpo != None and self.bpo.isAlive():
+			self.bpo.SetRate(self.rate)
 	
 	def OnPhaseAdjust(self, event):
 		self.phaseOffset = self.PhaseSpinCtrl.GetValue()
