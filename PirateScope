@@ -24,7 +24,7 @@ class BPO(Thread):
 	minV = 0.
 	maxV = 6.
 
-	def __init__(self, port, rate, mode, sync, trigV, phaseOffset):
+	def __init__(self, port, winsize, rate, mode, sync, trigV, phaseOffset):
 
 		# Open BP serial device:
 		self.serdev = serial.Serial(port=port, baudrate=115200)
@@ -38,7 +38,7 @@ class BPO(Thread):
 		self.trigV = trigV
 		self.phaseOffset = phaseOffset
 		self.rate = rate
-		self.data = -1*ones(100)
+		self.data = -10*ones(winsize)
 
 		# Enter binary scripting mode:
 		self.serdev.write('\n\n')
@@ -217,7 +217,7 @@ class MainWindow(wx.Frame):
 	def __init__(self, parent, title):
 
 		# Call standard frame constructor:
-		wx.Frame.__init__(self, parent, title=title, id=wx.ID_ANY, size=(500,480))
+		wx.Frame.__init__(self, parent, title=title, id=wx.ID_ANY, size=(640,480))
 
 		# Add status bar:
 		self.CreateStatusBar()
@@ -253,19 +253,20 @@ class MainWindow(wx.Frame):
 		self.RB_continuous = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Continuous', style=wx.RB_GROUP)
 		self.RB_oneshot = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Single shot')
 		self.FFTCheckBox = wx.CheckBox(self.contpanel, wx.ID_ANY, 'Spectrum')
-		self.RateSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Rate (Hz):')
+		self.RateSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Hz')
 		self.RateSpinCtrl = wx.SpinCtrl(self.contpanel, wx.ID_ANY,
-				initial=BPO.maxRate, min=BPO.minRate, max=BPO.maxRate,
-				size=(60,-1))
+				initial=BPO.maxRate, min=BPO.minRate, max=BPO.maxRate)
+		self.WinSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Samples/win:')
+		self.WinSpinCtrl = wx.SpinCtrl(self.contpanel, wx.ID_ANY,
+				initial=100, min=100, max=1000)
 
 		self.TriggeringBox = wx.StaticBox(self.contpanel, wx.ID_ANY, 'Triggering')
 		self.RB_trigoff = wx.RadioButton(self.contpanel, wx.ID_ANY, 'No sync', style=wx.RB_GROUP)
 		self.RB_trigrise = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Rising edge')
 		self.RB_trigfall = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Falling edge')
-		self.PhaseSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Offset:')
+		self.PhaseSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Offset (%win):')
 		self.PhaseSpinCtrl = wx.SpinCtrl(self.contpanel, wx.ID_ANY,
-				initial=0, min=-100, max=100,
-				size=(50,-1))
+				initial=0, min=-100, max=100)
 		
 
 		# Oscilloscope controls panel sizers:
@@ -279,8 +280,12 @@ class MainWindow(wx.Frame):
 		self.SamplingBoxSizer2.Add(self.FFTCheckBox, 1)
 		self.SamplingBoxSizer.Add(self.SamplingBoxSizer2, 1, wx.EXPAND)
 		self.SamplingBoxSizer3 = wx.BoxSizer(wx.VERTICAL)
-		self.SamplingBoxSizer3.Add(self.RateSpinCtrlText)
-		self.SamplingBoxSizer3.Add(self.RateSpinCtrl)
+		self.SamplingBoxSizer4 = wx.BoxSizer(wx.HORIZONTAL)
+		self.SamplingBoxSizer4.Add(self.RateSpinCtrl,1)
+		self.SamplingBoxSizer4.Add(self.RateSpinCtrlText,0)
+		self.SamplingBoxSizer3.Add(self.SamplingBoxSizer4)
+		self.SamplingBoxSizer3.Add(self.WinSpinCtrlText)
+		self.SamplingBoxSizer3.Add(self.WinSpinCtrl)
 		self.SamplingBoxSizer.Add(self.SamplingBoxSizer3, 0, wx.EXPAND)
 		self.contsizer.Add(self.SamplingBoxSizer, 1, wx.EXPAND | wx.RIGHT, 20)
 
@@ -373,6 +378,7 @@ class MainWindow(wx.Frame):
 		self.SetMenuBar(menuBar)
 	
 	def OscilloscopeDefaultSetup(self):
+		self.winsize = 100
 		self.rate = BPO.maxRate
 		self.mode = BPO.MODE_CONTINUOUS
 		self.sync = BPO.SYNC_NONE
@@ -386,7 +392,7 @@ class MainWindow(wx.Frame):
 				data = [(i,self.bpo.data[i]) for i in range(len(self.bpo.data))]
 				plotrange = (-1,7)
 			else:
-				data = [(0,-1),(100,-1)]
+				data = [(0,-10),(100,-10)]
 				plotrange = (-1,7)
 
 			plotlist = [plot.PolyLine(data, colour='blue', width=2)]
@@ -408,7 +414,7 @@ class MainWindow(wx.Frame):
 				if plotrange[1]==0.:
 					plotrange = (-1,1)
 			else:
-				data = [(0,-1),(100,-1)]
+				data = [(0,-10),(100,-10)]
 				plotrange = (0,1)
 
 			plotlist = [plot.PolyLine(data, colour='purple', width=2)]
@@ -472,6 +478,7 @@ terms of the GNU General Public License.
 			# Fire up oscilloscope:
 			try: 
 				self.bpo = BPO(self.port,
+						self.winsize,
 						self.rate,
 						self.mode,
 						self.sync,
