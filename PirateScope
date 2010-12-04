@@ -1,12 +1,29 @@
 #!/usr/bin/env python
 
+# Pirate Scope v0.1 - Oscilloscope script for Dangerous Prototypes' Bus Pirate
+# Copyright (C) 2010 Tim Vaughan
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 import wx
 from wx.lib import plot
-import serial, time, sys
+from wx.lib.wordwrap import wordwrap
+import serial, time, sys, os
 from threading import Thread
 
 from numpy import *
-from numpy.fft import fft
+from numpy.fft import rfft
 
 class BPO(Thread):
 
@@ -17,14 +34,12 @@ class BPO(Thread):
 	MODE_CONTINUOUS = 0
 	MODE_ONESHOT = 1
 
-	minRate = 1.
-	maxRate = 5500.
-	freqRes = 100.
-
 	minV = 0.
 	maxV = 6.
 
-	def __init__(self, port, winsize, rate, mode, sync, trigV, phaseOffset):
+	BaseRate = 5720 # Hz
+
+	def __init__(self, port, win, rate, mode, sync, trigV, phaseOffset):
 
 		# Open BP serial device:
 		self.serdev = serial.Serial(port=port, baudrate=115200)
@@ -38,7 +53,10 @@ class BPO(Thread):
 		self.trigV = trigV
 		self.phaseOffset = phaseOffset
 		self.rate = rate
-		self.data = -10*ones(winsize)
+		self.win = win
+
+		# Initialize data buffer:
+		self.data = -10*ones(win)
 
 		# Enter binary scripting mode:
 		self.serdev.write('\n\n')
@@ -60,7 +78,12 @@ class BPO(Thread):
 	def run(self):
 
 		if self.mode == self.MODE_CONTINUOUS:
+
 			while True:
+
+				if len(self.data) != self.win:
+					self.data = -10*ones(self.win)
+
 				self.sample()
 				if self.wantAbort:
 					self.shutdown()
@@ -74,14 +97,9 @@ class BPO(Thread):
 
 	def getV(self):
 
-		if self.FreqAdjust:
-			freqSkip = self.freqSkip # local copy to prevent divide by zeros
-						 # caused by external freq adjustment
-			while self.freqSkipIdx < freqSkip:
-				self.freqSkipIdx += 1
-				resp = self.serdev.read(2)
-
-			self.freqSkipIdx = (self.freqSkipIdx+1)%freqSkip
+		# Sampling frequency divider
+		for i in range(self.rate-1):
+			resp = self.serdev.read(2)
 
 		resp = self.serdev.read(2)
 		return (ord(resp[0])*256 + ord(resp[1]))*6.6/1024
@@ -106,8 +124,8 @@ class BPO(Thread):
 
 		if self.sync != self.SYNC_NONE:
 
-			phaseOffsetP = max(self.phaseOffset,0)
-			phaseOffsetN = -min(self.phaseOffset,0)
+			phaseOffsetP = max(self.phaseOffset*self.win/100,0)
+			phaseOffsetN = -min(self.phaseOffset*self.win/100,0)
 			vbuffer = zeros(phaseOffsetN)
 
 			# Pad out buffer to account for negative phase offset:
@@ -181,35 +199,22 @@ class BPO(Thread):
 
 
 	def SetRate(self, rate):
+		self.rate = rate
 
-		# Adjust sampling rate
+	def SetWin(self, win):
+		self.win = win
 
-		rate = min(rate,self.maxRate)
-		rate = max(rate,self.minRate)
+	def SetSync(self, sync):
+		self.sync = sync
 
-		self.freqSkip = int(self.freqRes*(self.maxRate-rate)/self.maxRate)
+	def SetTrig(self, trig):
+		self.trigV = trig
 
-		if self.freqSkip>0:
-			self.FreqAdjust = True
-			self.freqSkipIdx = 0
-		else:
-			self.FreqAdjust = False
-
-
-	def SetSync(self, newSync):
-		self.sync = newSync
-	
-	def SetTrig(self, newTrig):
-		self.trigV = newTrig
-
-	def SetPhaseOffset(self, newOffset):
-		self.phaseOffset = newOffset
+	def SetPhaseOffset(self, offset):
+		self.phaseOffset = offset
 
 
 class MainWindow(wx.Frame):
-
-	# Define Bus Pirate port (temporary)
-	port = '/dev/bus_pirate'
 
 	# Property to hold BPO instance:
 	bpo = None
@@ -233,6 +238,7 @@ class MainWindow(wx.Frame):
 		self.plotpanel.SetBackgroundColour('white')
 		self.plot = plot.PlotCanvas(self.plotpanel)
 		self.plot.SetGridColour('grey')
+		self.plot.SetEnableGrid(True)
 
 		self.TrigLevSlider = wx.Slider(self.plotpanel, wx.ID_ANY,
 				50.*(BPO.maxV-BPO.minV), 100.*BPO.minV, 100.*BPO.maxV,
@@ -253,9 +259,10 @@ class MainWindow(wx.Frame):
 		self.RB_continuous = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Continuous', style=wx.RB_GROUP)
 		self.RB_oneshot = wx.RadioButton(self.contpanel, wx.ID_ANY, 'Single shot')
 		self.FFTCheckBox = wx.CheckBox(self.contpanel, wx.ID_ANY, 'Spectrum')
-		self.RateSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Hz')
-		self.RateSpinCtrl = wx.SpinCtrl(self.contpanel, wx.ID_ANY,
-				initial=BPO.maxRate, min=BPO.minRate, max=BPO.maxRate)
+		self.RateChoiceText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Hz')
+		self.RateChoice = wx.Choice(self.contpanel, wx.ID_ANY,
+				choices = [str(int(i)) for i in BPO.BaseRate/arange(1,11)])
+				
 		self.WinSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Samples/win:')
 		self.WinSpinCtrl = wx.SpinCtrl(self.contpanel, wx.ID_ANY,
 				initial=100, min=100, max=1000)
@@ -281,8 +288,8 @@ class MainWindow(wx.Frame):
 		self.SamplingBoxSizer.Add(self.SamplingBoxSizer2, 1, wx.EXPAND)
 		self.SamplingBoxSizer3 = wx.BoxSizer(wx.VERTICAL)
 		self.SamplingBoxSizer4 = wx.BoxSizer(wx.HORIZONTAL)
-		self.SamplingBoxSizer4.Add(self.RateSpinCtrl,1)
-		self.SamplingBoxSizer4.Add(self.RateSpinCtrlText,0)
+		self.SamplingBoxSizer4.Add(self.RateChoice,1)
+		self.SamplingBoxSizer4.Add(self.RateChoiceText,0)
 		self.SamplingBoxSizer3.Add(self.SamplingBoxSizer4)
 		self.SamplingBoxSizer3.Add(self.WinSpinCtrlText)
 		self.SamplingBoxSizer3.Add(self.WinSpinCtrl)
@@ -314,15 +321,13 @@ class MainWindow(wx.Frame):
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnSampContinuous, self.RB_continuous) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnSampOneShot, self.RB_oneshot) 
 		self.Bind(wx.EVT_CHECKBOX, self.OnFFTCheckBox, self.FFTCheckBox) 
-		self.Bind(wx.EVT_SPINCTRL, self.OnRateAdjust, self.RateSpinCtrl) 
+		self.Bind(wx.EVT_CHOICE, self.OnRateAdjust, self.RateChoice) 
+		self.Bind(wx.EVT_SPINCTRL, self.OnWinAdjust, self.WinSpinCtrl) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigRise, self.RB_trigrise) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigFall, self.RB_trigfall) 
 		self.Bind(wx.EVT_RADIOBUTTON, self.OnTrigOff, self.RB_trigoff) 
 		self.Bind(wx.EVT_SLIDER, self.OnTrigLevAdjust, self.TrigLevSlider) 
 		self.Bind(wx.EVT_SPINCTRL, self.OnPhaseAdjust, self.PhaseSpinCtrl)
-
-		# Draw empty plot:
-		self.UpdatePlot()
 
 		# Set up plot updating timer:
 		self.timer = wx.Timer(self)
@@ -330,6 +335,9 @@ class MainWindow(wx.Frame):
 
 		# Set up oscilloscope defaults:
 		self.OscilloscopeDefaultSetup()
+
+		# Draw empty plot:
+		self.UpdatePlot()
 
 		self.Show(True)
 
@@ -341,22 +349,32 @@ class MainWindow(wx.Frame):
 
 		# File menu:
 		filemenu = wx.Menu()
-		menuItemSave = filemenu.Append(wx.ID_ANY, "&Save", "Save sample to file")
-		menuItemSave.Enable(False)
+
+		menuItemFileSaveSample = filemenu.Append(wx.ID_ANY, "&Save Sample", "Save sample to file")
+		self.Bind(wx.EVT_MENU, self.OnFileSaveSample, menuItemFileSaveSample)
+
+		menuItemFileSaveGraph = filemenu.Append(wx.ID_ANY, "Save &Graph", "Save graph to file")
+		self.Bind(wx.EVT_MENU, self.OnFileSaveGraph, menuItemFileSaveGraph)
+
+		menuItemFileSetDevice = filemenu.Append(wx.ID_ANY, "Set Bus Pirate &Device",
+				"Set Bus Pirate serial device.")
+		self.Bind(wx.EVT_MENU, self.OnFileSetDevice, menuItemFileSetDevice)
 
 		filemenu.AppendSeparator()
 
-		menuItemExit = filemenu.Append(wx.ID_EXIT, "E&xit", "Terminate the program.")
-		self.Bind(wx.EVT_MENU, self.OnExit, menuItemExit)
+		menuItemFileExit = filemenu.Append(wx.ID_EXIT, "E&xit", "Terminate the program.")
+		self.Bind(wx.EVT_MENU, self.OnFileExit, menuItemFileExit)
 
 		menuBar.Append(filemenu, "&File")
 
 		# View menu:
 		viewmenu = wx.Menu()
-		self.menuItemViewGrid = viewmenu.Append(wx.ID_ANY, '&Grid', 'Toggle grid', kind=wx.ITEM_CHECK)
+		self.menuItemViewGrid = viewmenu.Append(wx.ID_ANY, '&Grid', 'Toggle grid',
+				kind=wx.ITEM_CHECK)
+		self.menuItemViewGrid.Check()
 		self.Bind(wx.EVT_MENU, self.OnViewGrid, self.menuItemViewGrid)
 		self.menuItemViewTrigLev = viewmenu.Append(wx.ID_ANY,
-				'&Trigger Level', 'Toggle trigger level visibility',
+				'Trigger &Level', 'Toggle trigger level visibility',
 				kind=wx.ITEM_CHECK)
 		self.Bind(wx.EVT_MENU, self.OnViewTrigLev, self.menuItemViewTrigLev)
 		self.menuItemViewTrigOrig = viewmenu.Append(wx.ID_ANY,
@@ -369,8 +387,8 @@ class MainWindow(wx.Frame):
 		# Help menu:
 		helpmenu = wx.Menu()
 
-		menuItemAbout = helpmenu.Append(wx.ID_ABOUT, "&About", "Information about this program.")
-		self.Bind(wx.EVT_MENU, self.OnAbout, menuItemAbout)
+		menuItemHelpAbout = helpmenu.Append(wx.ID_ABOUT, "&About", "Information about this program.")
+		self.Bind(wx.EVT_MENU, self.OnHelpAbout, menuItemHelpAbout)
 
 		menuBar.Append(helpmenu, "&Help")
 
@@ -378,49 +396,70 @@ class MainWindow(wx.Frame):
 		self.SetMenuBar(menuBar)
 	
 	def OscilloscopeDefaultSetup(self):
-		self.winsize = 100
-		self.rate = BPO.maxRate
+		self.port = '/dev/bus_pirate'
+		self.win = 100
+		self.rate = 1
 		self.mode = BPO.MODE_CONTINUOUS
 		self.sync = BPO.SYNC_NONE
 		self.trigV = 0.5*(BPO.maxV-BPO.minV)
 		self.phaseOffset = 0
 
+		self.sampdt = self.rate/float(BPO.BaseRate)
+		self.winT = self.win*self.sampdt
+
 	def UpdatePlot(self):
 
 		if not self.FFTCheckBox.IsChecked():
+			# Plot raw voltage data:
+
 			if self.bpo != None:
-				data = [(i,self.bpo.data[i]) for i in range(len(self.bpo.data))]
+				data = [(1000*i*self.sampdt,self.bpo.data[i]) for i in range(len(self.bpo.data))]
+				plotdomain = (0,1000*self.winT)
 				plotrange = (-1,7)
 			else:
-				data = [(0,-10),(100,-10)]
+				data = [(0,-10),(1000*self.winT,-10)]
+				plotdomain = (0,1000*self.winT)
 				plotrange = (-1,7)
 
-			plotlist = [plot.PolyLine(data, colour='blue', width=2)]
+			plotlist = [plot.PolyLine(data, colour='blue', width=1)]
 
+			# Plot trigger voltage level:
 			if self.menuItemViewTrigLev.IsChecked():
-				triglev_dat = [(0,self.trigV),(100,self.trigV)]
-				plotlist.append(plot.PolyLine(triglev_dat, colour='red', style=wx.LONG_DASH, width=1))
+				triglev_dat = [(0,self.trigV),(1000*self.winT,self.trigV)]
+				plotlist.append(plot.PolyLine(triglev_dat, colour='red',
+					style=wx.LONG_DASH, width=2))
 
+			# Plot trigger origin time:
 			if self.menuItemViewTrigOrig.IsChecked():
-				trigorig_dat = [(-self.phaseOffset,-1),(-self.phaseOffset,7)]
-				plotlist.append(plot.PolyLine(trigorig_dat, colour='red', style=wx.LONG_DASH, width=1))
+				trigorig_dat = [(-self.phaseOffset*10.*self.winT,-1),
+						(-self.phaseOffset*10*self.winT,7)]
+				plotlist.append(plot.PolyLine(trigorig_dat, colour='red',
+					style=wx.LONG_DASH, width=2))
 
-			gc = plot.PlotGraphics(plotlist, '', 'Sample', 'Voltage')
+			gc = plot.PlotGraphics(plotlist, '', 'Time (ms)', 'Voltage')
 		else:
+			# Plot FFT of voltage data:
+
 			if self.bpo != None:
-				fftresult = abs(fft(self.bpo.data))/sqrt(len(self.bpo.data))
-				data = [(i,fftresult[i]) for i in range(len(fftresult))]
-				plotrange = (-1,max(fftresult))
+				fftresult = abs(rfft(self.bpo.data))
+				data = [(float(i)/len(self.bpo.data)/self.sampdt,fftresult[i]) for i in range(len(fftresult))]
+
+				plotdomain = (0,data[-1][0])
+				plotrange = (-0.05*max(fftresult),max(fftresult))
 				if plotrange[1]==0.:
 					plotrange = (-1,1)
+					plotdomain = (0,(self.win/2-1)/(self.win*self.sampdt))
+
 			else:
-				data = [(0,-10),(100,-10)]
+				data = [(0,-10),((self.win/2-1)/(self.win*self.sampdt),-10)]
+				plotdomain = (0,(self.win/2-1)/(self.win*self.sampdt))
 				plotrange = (0,1)
 
-			plotlist = [plot.PolyLine(data, colour='purple', width=2)]
-			gc = plot.PlotGraphics(plotlist, '', 'Frequency', 'Amplitude')
+			plotlist = [plot.PolyLine(data, colour='purple', width=1)]
+			gc = plot.PlotGraphics(plotlist, '', 'Frequency (Hz)', 'Amplitude')
 
-		self.plot.Draw(gc, xAxis=(0,100), yAxis=plotrange)
+		# Draw plot to canvas:
+		self.plot.Draw(gc, xAxis=plotdomain, yAxis=plotrange)
 
 	def OnViewGrid(self, event):
 		self.plot.SetEnableGrid(self.menuItemViewGrid.IsChecked())
@@ -428,26 +467,88 @@ class MainWindow(wx.Frame):
 	def OnViewTrigLev(self, event):
 		if not self.SampleButton.GetValue():
 			self.UpdatePlot()
-	
+
 	def OnViewTrigOrig(self, event):
 		if not self.SampleButton.GetValue():
 			self.UpdatePlot()
 
-	def OnAbout(self, event):
+	def OnHelpAbout(self, event):
 
-		about_msg = """
-PirateScope v0.1
-(C) 2010 Free Software Foundation
+		info = wx.AboutDialogInfo()
 
-This software is distributed under the
-terms of the GNU General Public License.
-"""
+		info.Name = "Pirate Scope"
+		info.Version = "0.1"
+		info.Copyright = "(C) 2010 Tim Vaughan"
+		info.Description = wordwrap(
+			"This program is free software: you can redistribute it and/or modify "
+			"it under the terms of the GNU General Public License as published by "
+			"the Free Software Foundation, either version 3 of the License, or "
+			"(at your option) any later version."
 
-		dlg = wx.MessageDialog(self, about_msg, "About PirateScope", wx.OK)
-		dlg.ShowModal()
+			"\n\nThis program is distributed in the hope that it will be useful, "
+			"but WITHOUT ANY WARRANTY; without even the implied warranty of "
+			"MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the "
+			"GNU General Public License for more details."
+
+			"\n\nYou should have received a copy of the GNU General Public License "
+			"along with this program.  If not, see <http://www.gnu.org/licenses/>.",
+			350,wx.ClientDC(self))
+
+		wx.AboutBox(info)
+	
+	def OnFileSetDevice(self, event):
+		
+		dlg = wx.TextEntryDialog(self,
+				"Please enter full path of Bus Pirate serial device:",
+				"Set Bus Pirate Device",
+				self.port)
+
+		if dlg.ShowModal() == wx.ID_OK:
+			self.port = dlg.GetValue()
+
 		dlg.Destroy()
 	
-	def OnExit(self, event):
+	def OnFileSaveSample(self, event):
+
+		if self.bpo != None:
+
+			dlg = wx.FileDialog(self,
+					message="Save sample as...",
+					defaultDir=".",
+					defaultFile="",
+					wildcard="*.txt",
+					style=wx.SAVE)
+
+			if dlg.ShowModal() == wx.ID_OK:
+
+				path = dlg.GetPath()
+
+				try:
+					outf = file(path, 'w')
+					outf.write('t V\n')
+					for i in range(len(self.bpo.data)):
+						V = self.bpo.data[i]
+						t = i*self.sampdt*1000.
+						outf.write('%g %g\n' % (t, V))
+					outf.close()
+				except:
+					msg = "Error writing data to file."
+					errordlg = wx.MessageDialog(self, msg, "Error", wx.OK)
+					errordlg.ShowModal()
+					errordlg.Destroy()
+
+			dlg.Destroy()
+
+		else:
+			msg = "No sampled data to write."
+			errordlg = wx.MessageDialog(self, msg, "Error", wx.OK)
+			errordlg.ShowModal()
+			errordlg.Destroy()
+
+	def OnFileSaveGraph(self, event):
+		a = 1
+	
+	def OnFileExit(self, event):
 
 		if self.SampleButton.GetValue():
 			self.timer.Stop()
@@ -455,7 +556,7 @@ terms of the GNU General Public License.
 			time.sleep(0.5)
 
 		self.Close(True)
-	
+
 	def OnUpdate(self, event):
 
 		self.UpdatePlot()
@@ -470,7 +571,6 @@ terms of the GNU General Public License.
 			# Display "SAMPLING"
 			self.SampleButton.SetLabel('SAMPLING')
 
-
 	def OnSampleButton(self, event):
 
 		if self.SampleButton.GetValue():
@@ -478,7 +578,7 @@ terms of the GNU General Public License.
 			# Fire up oscilloscope:
 			try: 
 				self.bpo = BPO(self.port,
-						self.winsize,
+						self.win,
 						self.rate,
 						self.mode,
 						self.sync,
@@ -545,19 +645,31 @@ terms of the GNU General Public License.
 		self.sync = BPO.SYNC_NONE
 		if self.SampleButton.GetValue():
 			self.bpo.SetSync(self.sync)
-	
+
 	def OnTrigLevAdjust(self, event):
 		self.trigV = self.TrigLevSlider.GetValue()/100.
 		if self.SampleButton.GetValue():
 			self.bpo.SetTrig(self.trigV)
 		elif self.menuItemViewTrigLev.IsChecked():
 			self.UpdatePlot()
-	
+
 	def OnRateAdjust(self, event):
-		self.rate = self.RateSpinCtrl.GetValue()
+		self.rate = self.RateChoice.GetSelection()+1
+		self.sampdt = self.rate/float(BPO.BaseRate)
+		self.winT = self.win*self.sampdt
 		if self.bpo != None and self.bpo.isAlive():
 			self.bpo.SetRate(self.rate)
-	
+		else:
+			self.UpdatePlot()
+
+	def OnWinAdjust(self, event):
+		self.win = self.WinSpinCtrl.GetValue()
+		self.winT = self.win*self.sampdt
+		if self.bpo != None and self.bpo.isAlive():
+			self.bpo.SetWin(self.win)
+		else:
+			self.UpdatePlot()
+
 	def OnPhaseAdjust(self, event):
 		self.phaseOffset = self.PhaseSpinCtrl.GetValue()
 		if self.bpo != None and self.bpo.isAlive():
