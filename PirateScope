@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Pirate Scope v0.1 - Oscilloscope script for Dangerous Prototypes' Bus Pirate
+# PirateScope v0.1 - Oscilloscope script for Dangerous Prototypes' Bus Pirate
 # Copyright (C) 2010 Tim Vaughan
 #
 # This program is free software: you can redistribute it and/or modify
@@ -19,11 +19,15 @@
 import wx
 from wx.lib import plot
 from wx.lib.wordwrap import wordwrap
+
 import serial, time, sys, os
 from threading import Thread
 
 from numpy import *
 from numpy.fft import rfft
+
+
+# Bus Pirate Oscilloscope class:
 
 class BPO(Thread):
 
@@ -39,10 +43,9 @@ class BPO(Thread):
 
 	BaseRate = 5720 # Hz
 
-	def __init__(self, port, win, rate, mode, sync, trigV, phaseOffset):
+	wantAbort = False
 
-		# Open BP serial device:
-		self.serdev = serial.Serial(port=port, baudrate=115200)
+	def __init__(self, port, win, rate, mode, sync, trigV, phaseOffset, debug=False):
 
 		# Perform default thread initialization:
 		Thread.__init__(self)
@@ -58,24 +61,42 @@ class BPO(Thread):
 		# Initialize data buffer:
 		self.data = -10*ones(win)
 
-		# Enter binary scripting mode:
-		self.serdev.write('\n\n')
-		time.sleep(0.1)
-		self.serdev.write(''.join(['\x00' for i in range(20)]))
-		time.sleep(0.1)
+		self.debug = debug
+		if not debug:
+			# Open BP serial device:
+			self.serdev = serial.Serial(port=port, baudrate=115200)
 
-		# Start continuous voltage measurement mode:
-		self.serdev.flushInput()
-		self.serdev.write('\x15')
-		time.sleep(0.1)
+			# Enter binary scripting mode:
+			self.serdev.write('\n\n')
+			time.sleep(0.1)
+			self.serdev.write(''.join(['\x00' for i in range(20)]))
+			time.sleep(0.1)
 
-		self.wantAbort = False
-		self.SetRate(rate)
+			# Start continuous voltage measurement mode:
+			self.serdev.flushInput()
+			self.serdev.write('\x15')
+			time.sleep(0.1)
 
 		self.start()
 
 
+	# Thread execution method:
 	def run(self):
+
+		if self.debug:
+
+			# Artificial waveforms for debugging FFT code
+
+			bpf = self.BaseRate/self.rate
+			t = linspace(0,float(self.win)/bpf, self.win)
+
+			# Sine wave frequency test:
+			self.data = 3.*(1.+sin(2*pi*self.BaseRate/10.*t))
+
+			# Square wave frequency test:
+			#self.data = 5.*(((t/(27.0/self.BaseRate))%1.0)>0.5)
+
+			return
 
 		if self.mode == self.MODE_CONTINUOUS:
 
@@ -95,6 +116,7 @@ class BPO(Thread):
 			return
 
 
+	# Acquire single voltage measurement:
 	def getV(self):
 
 		# Sampling frequency divider
@@ -105,6 +127,7 @@ class BPO(Thread):
 		return (ord(resp[0])*256 + ord(resp[1]))*6.6/1024
 
 
+	# Check whether trigger condition has been met:
 	def trig_check(self, thisV, lastV):
 
 		if self.sync == self.SYNC_RISE:
@@ -112,6 +135,7 @@ class BPO(Thread):
 		else:
 			return (thisV <= self.trigV) and (lastV > self.trigV)
 
+	# Provide correct initialisation for lastV:
 	def trig_init(self):
 
 		if self.sync == self.SYNC_RISE:
@@ -120,6 +144,7 @@ class BPO(Thread):
 			return self.minV
 
 
+	# Acquire full window of data:
 	def sample(self):
 
 		if self.sync != self.SYNC_NONE:
@@ -183,20 +208,28 @@ class BPO(Thread):
 					return
 
 
+	# Ask thread to terminate:
 	def abort(self):
 		self.wantAbort = True
 
+	# Shut down Bus Pirate:
 	def shutdown(self):
+
+		# Cease ADC input:
 
 		self.serdev.write(' ')
 		time.sleep(0.1)
 		self.serdev.flushInput()
+
+		# Reset to return to BP ascii mode:
 
 		self.serdev.write('\x0f')
 		time.sleep(0.1)
 		self.serdev.flushInput()
 		self.serdev.close()
 
+
+	# Oscilloscope adjustment methods:
 
 	def SetRate(self, rate):
 		self.rate = rate
@@ -213,6 +246,8 @@ class BPO(Thread):
 	def SetPhaseOffset(self, offset):
 		self.phaseOffset = offset
 
+
+# Main application window class:
 
 class MainWindow(wx.Frame):
 
@@ -342,6 +377,7 @@ class MainWindow(wx.Frame):
 		self.Show(True)
 
 
+	# Menu initialization subroutine:
 	def MenuSetup(self):
 
 		# Create menu bar:
@@ -355,6 +391,8 @@ class MainWindow(wx.Frame):
 
 		menuItemFileSaveGraph = filemenu.Append(wx.ID_ANY, "Save &Graph", "Save graph to file")
 		self.Bind(wx.EVT_MENU, self.OnFileSaveGraph, menuItemFileSaveGraph)
+
+		filemenu.AppendSeparator()
 
 		menuItemFileSetDevice = filemenu.Append(wx.ID_ANY, "Set Bus Pirate &Device",
 				"Set Bus Pirate serial device.")
@@ -395,8 +433,9 @@ class MainWindow(wx.Frame):
 		# Assign menubar to frame:
 		self.SetMenuBar(menuBar)
 	
+	# Set default sampling parameters:
 	def OscilloscopeDefaultSetup(self):
-		self.port = '/dev/bus_pirate'
+		self.port = '/dev/ttyUSB0'
 		self.win = 100
 		self.rate = 1
 		self.mode = BPO.MODE_CONTINUOUS
@@ -407,6 +446,8 @@ class MainWindow(wx.Frame):
 		self.sampdt = self.rate/float(BPO.BaseRate)
 		self.winT = self.win*self.sampdt
 
+
+	# Update or clear plot canvas:
 	def UpdatePlot(self):
 
 		if not self.FFTCheckBox.IsChecked():
@@ -461,6 +502,7 @@ class MainWindow(wx.Frame):
 		# Draw plot to canvas:
 		self.plot.Draw(gc, xAxis=plotdomain, yAxis=plotrange)
 
+	# View menu event handlers:
 	def OnViewGrid(self, event):
 		self.plot.SetEnableGrid(self.menuItemViewGrid.IsChecked())
 
@@ -472,14 +514,15 @@ class MainWindow(wx.Frame):
 		if not self.SampleButton.GetValue():
 			self.UpdatePlot()
 
+	# Display about box:
 	def OnHelpAbout(self, event):
 
 		info = wx.AboutDialogInfo()
 
-		info.Name = "Pirate Scope"
+		info.Name = "PirateScope"
 		info.Version = "0.1"
 		info.Copyright = "(C) 2010 Tim Vaughan"
-		info.Description = wordwrap(
+		info.License = wordwrap(
 			"This program is free software: you can redistribute it and/or modify "
 			"it under the terms of the GNU General Public License as published by "
 			"the Free Software Foundation, either version 3 of the License, or "
@@ -492,10 +535,17 @@ class MainWindow(wx.Frame):
 
 			"\n\nYou should have received a copy of the GNU General Public License "
 			"along with this program.  If not, see <http://www.gnu.org/licenses/>.",
-			350,wx.ClientDC(self))
+			500, wx.ClientDC(self))
+
+		info.Description = wordwrap(
+			"A small utility which allows one to use the ADC input of a "
+			"Bus Pirate as a slow, single-channel oscilloscope.  Triggering "
+			"and spectrum analysis are supported.",
+			350, wx.ClientDC(self))
 
 		wx.AboutBox(info)
 	
+	# Set Bus Pirate serial device:
 	def OnFileSetDevice(self, event):
 		
 		dlg = wx.TextEntryDialog(self,
@@ -508,6 +558,7 @@ class MainWindow(wx.Frame):
 
 		dlg.Destroy()
 	
+	# Save sample to file:
 	def OnFileSaveSample(self, event):
 
 		if self.bpo != None:
@@ -545,11 +596,13 @@ class MainWindow(wx.Frame):
 			errordlg.ShowModal()
 			errordlg.Destroy()
 
+	# Save image of graph to file:
 	def OnFileSaveGraph(self, event):
 
 		# Use built-in PyPlot image saving method:
 		self.plot.SaveFile()
 	
+	# Quit:
 	def OnFileExit(self, event):
 
 		if self.SampleButton.GetValue():
@@ -559,6 +612,7 @@ class MainWindow(wx.Frame):
 
 		self.Close(True)
 
+	# Timer event hanlder:
 	def OnUpdate(self, event):
 
 		self.UpdatePlot()
@@ -573,6 +627,7 @@ class MainWindow(wx.Frame):
 			# Display "SAMPLING"
 			self.SampleButton.SetLabel('SAMPLING')
 
+	# Initiate sampling:
 	def OnSampleButton(self, event):
 
 		if self.SampleButton.GetValue():
@@ -624,6 +679,8 @@ class MainWindow(wx.Frame):
 				self.RB_oneshot.Enable()
 
 	
+	# Oscilloscope control event handlers:
+
 	def OnSampContinuous(self, event):
 		self.mode = BPO.MODE_CONTINUOUS
 
@@ -680,6 +737,8 @@ class MainWindow(wx.Frame):
 			self.UpdatePlot()
 
 
-app = wx.App(False)
-frame = MainWindow(None, 'PirateScope')
-app.MainLoop()
+# Main program loop:
+if __name__ == '__main__':
+	app = wx.App(False)
+	frame = MainWindow(None, 'PirateScope')
+	app.MainLoop()
