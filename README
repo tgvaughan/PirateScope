@@ -29,7 +29,7 @@ PirateScope has several modes of operation,  the default being the
 continuous sampling mode without synchronisation.  This is a good
 starting point, as it allows you to see whether any signal is being
 received. The sampling rate and the total number of samples displayed
-on the graph can each be adjusted at any time using the controls on
+in the window can each be adjusted at any time using the controls on
 the right-hand side of the "Sampling" panel.
 
 Once you're getting a clear signal, it may be sensible to select one
@@ -55,3 +55,14 @@ a Fourier transform of the most recent window of the captured signal.
 most recent window of data is ever used to compute the spectrum.) The
 maximum frequency is set by the Nyquist frequency, which is half the
 current sampling rate.
+
+The most recent displayed sampled voltages can be written to disk
+using the File->Save Sample.  This creates an ASCII file containing
+two columns, with the first being the sample times and the second
+being the corresponding voltage measurements. The first row of the
+file is a header which allows the data file to be easily read into R
+data analysis environment (http://www.r-project.org).
+
+The currently-displayed graph can also be written to disk as an image
+in a variety of formats (including BMP, JPEG and PNG) using
+File->Save Graph.
