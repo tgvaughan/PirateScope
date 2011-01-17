@@ -419,6 +419,10 @@ class MainWindow(wx.Frame):
 				'Trigger &Origin', 'Toggle trigger origin visibility',
 				kind=wx.ITEM_CHECK)
 		self.Bind(wx.EVT_MENU, self.OnViewTrigOrig, self.menuItemViewTrigOrig)
+		viewmenu.AppendSeparator()
+		self.menuItemViewAutoscale = viewmenu.Append(wx.ID_ANY, '&Automatic Axis Scaling',
+				kind=wx.ITEM_CHECK)
+		self.Bind(wx.EVT_MENU, self.OnViewAutoscale, self.menuItemViewAutoscale)
 
 		menuBar.Append(viewmenu, '&View')
 
@@ -453,14 +457,21 @@ class MainWindow(wx.Frame):
 		if not self.FFTCheckBox.IsChecked():
 			# Plot raw voltage data:
 
+			# Default voltage range:
+			plotrange = (-1,7)
+
 			if self.bpo != None:
-				data = [(1000*i*self.sampdt,self.bpo.data[i]) for i in range(len(self.bpo.data))]
+				vdata = self.bpo.data
+				data = [(1000*i*self.sampdt,vdata[i]) for i in range(len(self.bpo.data))]
 				plotdomain = (0,1000*self.winT)
-				plotrange = (-1,7)
+
+				if self.menuItemViewAutoscale.IsChecked():
+					vmax = max(vdata)
+					if vmax>0.:
+						plotrange = (0.,max(vdata))
 			else:
 				data = [(0,-10),(1000*self.winT,-10)]
 				plotdomain = (0,1000*self.winT)
-				plotrange = (-1,7)
 
 			plotlist = [plot.PolyLine(data, colour='blue', width=1)]
 
@@ -513,6 +524,11 @@ class MainWindow(wx.Frame):
 	def OnViewTrigOrig(self, event):
 		if not self.SampleButton.GetValue():
 			self.UpdatePlot()
+
+	def OnViewAutoscale(self, event):
+		if not self.SampleButton.GetValue():
+			self.UpdatePlot()
+
 
 	# Display about box:
 	def OnHelpAbout(self, event):
@@ -656,9 +672,11 @@ class MainWindow(wx.Frame):
 			# Display "STOP SAMPLING"
 			self.SampleButton.SetLabel('    STOP\nSAMPLING')
 
-			# If continuous sampling selected, disable one shot radio button:
+			# Prevent switching mode while sampling:
 			if self.mode == BPO.MODE_CONTINUOUS:
 				self.RB_oneshot.Disable()
+			else:
+				self.RB_continuous.Disable()
 
 			# Start plot timer (0.1s intervals):
 			self.timer.Start(milliseconds=100)
@@ -675,8 +693,9 @@ class MainWindow(wx.Frame):
 				# Display "SAMPLING"
 				self.SampleButton.SetLabel('SAMPLING')
 
-				# Ensure one shot radio button is enabled:
+				# Ensure sampling mode radio buttons are enabled:
 				self.RB_oneshot.Enable()
+				self.RB_continuous.Enable()
 
 	
 	# Oscilloscope control event handlers:
