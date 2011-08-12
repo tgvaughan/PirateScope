@@ -10,8 +10,8 @@ System Requirements
 -------------------
 
 Operating System:
-- Although in princple cross-platform, PiratScope has only been tested
-  on a Debian GNU/Linux system.
+- PirateScope has been tested under Debian GNU/Linux and OS X Snow
+  Leopard.
 
 Software:
 - Python 2.x (http://www.python.org/)
@@ -20,6 +20,16 @@ Software:
 
 Hardware:
 - Bus Pirate with firmware v5.9 or later
+
+
+Installation
+------------
+
+Under Debian, the software dependencies can be met simply by
+installing the necessary packages using apt.  Under OS X the process
+is slightly more involved, but Github user granitepenguin
+(github.com/granitepenguine) has generously provided detailed
+instructions which are contained within the file INSTALL.OSX.
 
 
 Usage notes

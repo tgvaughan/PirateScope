@@ -1,0 +1,57 @@
+Installing PirateScope under Snow Leopard
+-----------------------------------------
+
+Github user granitepenguin (http://github.com/granitepenguin)
+generously contributed the following instructions for getting
+PirateScope working under OS X Snow Leopard.
+
+Required Software:
+- Python 2.x (http://www.python.org/)
+- wxPython (http://www.wxpython.org/)
+- numpy (http://www.numpy.org/)
+
+Installing the needed bits (assuming the Apple built-in version of Python):
+
+Python: 
+Snow Leopard comes with python 2.6.1, however, it does not
+include pySerial, so you will need to grab that and install it yourself
+at http://sourceforge.net/projects/pyserial/
+One cool little extra that comes with pySerial is miniterm.py.  It's a
+serial terminal app written in python, and it works with the bus pirate.
+I got it to access my BP with the following:
+    miniterm.py -b 115200 /dev/tty.usbserial-A5005BSM
+Obviously, your BP /dev/tty will be different, so just replace it with
+yours.
+
+To install pySerial, just extract the tarball and run the normal install cmd:
+    sudo python setup.py install
+
+wxPython: 
+I used wxPython2.8-osx-unicode-py2.6, there is a caveat,
+though; the current stable versions use carbon, so they are limited to
+running in 32-bit mode.  This will work, but you need to export a
+variable to tell it to use 32-bit when running: 
+  export VERSIONER_PYTHON_PREFER_32_BIT=yes; ./PirateScope
+
+Installing is easy, it's just a MacOS Installer pkg file.
+
+Presumably, if you go with the development branch of wxPython that has
+cocoa instead of carbon, you will get full 64-bit and won't need the
+variable export.  You will also be deviating from the built-in python,
+so all bets are off at that point.
+
+numpy:
+The official OSX release is stated to work only with the version
+of python from python.org, NOT the Apple-released one, so if you want to
+install just numpy, and not the superpack, this probably isn't going to
+work the way I'm explaining it now.  
+
+I was, however, able to get the Mac OS X 64-bit unofficial release to
+work.  It is included in the SciPy Superpack for Python 2.6 at
+http://stronginference.com/scipy-superpack/ The notes on the site say to
+make sure that Xcode 4 is installed on your system (presumably for the
+development toolchain), but the install worked fine on my system with
+Xcode 3.2.1 (which is fairly old, but you probably need SOME version of
+Xcode to install).  The superpack is pretty cool because it also gives
+you some other tools: Scipy, matplotlib, iPython and PyMC.  I use
+iPython a lot as my interactive interpreter.
