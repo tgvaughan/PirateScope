@@ -28,7 +28,7 @@ Installation
 Under Debian, the software dependencies can be met simply by
 installing the necessary packages using apt.  Under OS X the process
 is slightly more involved, but Github user granitepenguin
-(github.com/granitepenguine) has generously provided detailed
+(http://github.com/granitepenguin) has generously provided detailed
 instructions which are contained within the file INSTALL.OSX.
 
 
