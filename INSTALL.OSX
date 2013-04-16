@@ -55,3 +55,13 @@ Xcode 3.2.1 (which is fairly old, but you probably need SOME version of
 Xcode to install).  The superpack is pretty cool because it also gives
 you some other tools: Scipy, matplotlib, iPython and PyMC.  I use
 iPython a lot as my interactive interpreter.
+
+Installation using MacPorts
+---------------------------
+
+If you have MacPorts installed, entering the following commands in a terminal
+window will ensure the necessary components are installed and the correct
+version of Python is being used:
+
+sudo port install py27-wxpython-devel wxWidgets-devel py27-numpy py27-serial
+sudo port select --set python python27
