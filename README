@@ -29,11 +29,11 @@ Under Debian, the software dependencies can be met simply by
 installing the necessary packages using apt.
 
 Under OS X the process is slightly more involved, but Github
-user granitepenguin (http://github.com/granitepenguin) has
-generously provided detailed instructions, which are contained
-within the file INSTALL.OSX.  Alternatively, as nicely pointed
-out by @esalgado, one can use MacPorts to simplify the process.
-(This is also described in INSTALL.OSX.)
+user @granitepenguin has generously provided detailed
+instructions, which are contained within the file INSTALL.OSX.
+Alternatively, as nicely pointed out by @esalgado, one can use
+MacPorts to simplify the process. (This is also described in
+INSTALL.OSX.)
 
 
 Usage notes
