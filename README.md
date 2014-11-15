@@ -15,7 +15,7 @@ Operating System:
 
 Software:
 - Python 2.x (http://www.python.org/)
-- wxPython (http://www.wxpython.org/)
+- wxPython 2.8 or later (http://www.wxpython.org/)
 - numpy (http://www.numpy.org/)
 
 Hardware:

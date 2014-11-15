@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# PirateScope v0.1 - Oscilloscope script for Dangerous Prototypes' Bus Pirate
+# PirateScope - Oscilloscope script for Dangerous Prototypes' Bus Pirate
 # Copyright (C) 2010 Tim Vaughan
 #
 # This program is free software: you can redistribute it and/or modify
@@ -16,8 +16,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import wxversion
-wxversion.select('2.8')
 import wx
 from wx.lib import plot
 from wx.lib.wordwrap import wordwrap
@@ -538,7 +536,6 @@ class MainWindow(wx.Frame):
 		info = wx.AboutDialogInfo()
 
 		info.Name = "PirateScope"
-		info.Version = "0.1"
 		info.Copyright = "(C) 2010 Tim Vaughan"
 		info.License = wordwrap(
 			"This program is free software: you can redistribute it and/or modify "
