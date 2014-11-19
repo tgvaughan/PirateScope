@@ -297,6 +297,7 @@ class MainWindow(wx.Frame):
 		self.RateChoiceText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Hz')
 		self.RateChoice = wx.Choice(self.contpanel, wx.ID_ANY,
 				choices = [str(int(i)) for i in BPO.BaseRate/arange(1,11)])
+                self.RateChoice.SetSelection(0)
 				
 		self.WinSpinCtrlText = wx.StaticText(self.contpanel, wx.ID_ANY, 'Samples/win:')
 		self.WinSpinCtrl = wx.SpinCtrl(self.contpanel, wx.ID_ANY,
