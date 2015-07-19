@@ -5,6 +5,10 @@ A simple oscilloscope client for the Bus Pirate universal serial
 interface.  (Visit http://dangerousprototypes.com/docs/Bus_Pirate for
 more information.)
 
+*WARNING*: Due to a bug in wxPython, PirateScope is unusable on
+Debian testing.  The bug has been fixed, but the updated version
+is not yet available in testing.
+
 
 System Requirements
 -------------------
